@@ -12,7 +12,6 @@ import { audioService } from './services/audioService.ts';
 import { 
   History as HistoryIcon, 
   CheckCircle2,
-  LayoutGrid,
   Trophy,
   ShieldCheck,
   BarChart3,
@@ -20,15 +19,11 @@ import {
   Trash2,
   TrendingUp,
   Activity as HealthIcon,
-  ShieldAlert,
-  Zap,
-  Star,
-  Timer,
   AlertTriangle,
   XCircle,
   TrendingDown,
-  Flame,
-  ZapOff
+  ZapOff,
+  Zap
 } from 'lucide-react';
 
 interface ExtendedSignalState extends SignalState {
@@ -154,82 +149,67 @@ const App: React.FC = () => {
   }, [history]);
 
   const analysis = useMemo(() => {
-    if (history.length < 10) return null;
+    if (history.length < 5) return null;
 
-    // Detecta a melhor coluna em tempo real, sem travar na anterior
+    // Detecção ultra-rápida de tendência
     let target = 1;
-    const p1 = getColPercentage(1, 20);
-    const p2 = getColPercentage(2, 20);
-    const p3 = getColPercentage(3, 20);
+    const p1 = getColPercentage(1, 10); // Reduzimos para 10 para detectar rapidez
+    const p2 = getColPercentage(2, 10);
+    const p3 = getColPercentage(3, 10);
     if (p2 > p1 && p2 > p3) target = 2;
     if (p3 > p1 && p3 > p2) target = 3;
 
+    const window2 = history.slice(0, 2);
     const window3 = history.slice(0, 3);
-    const window4 = history.slice(0, 4);
     const window5 = history.slice(0, 5);
-    const window7 = history.slice(0, 7);
+    const window8 = history.slice(0, 8);
 
-    // GATILHOS CONFORME TABELA
-    const C1_Dominance = getColPercentage(target, 20) >= 35; 
-    const G_Pressure = window7.filter(s => s.column === target).length >= 4; 
+    // GATILHOS OTIMIZADOS PARA ACERTIVIDADE E VELOCIDADE
+    // C1: Dominante agora aceita 35% em 20 spins OU 45% em 10 spins (detecção de estouro)
+    const perc20 = getColPercentage(target, 20);
+    const perc10 = getColPercentage(target, 10);
+    const C1_Dominance = perc20 >= 35 || perc10 >= 40; 
     
-    const G_Continuity = window4.filter(s => s.column === target).length >= 2; 
+    // Pressão ajustada para 3 de 5 (mais rápido que 4 de 7)
+    const G_Pressure = window5.filter(s => s.column === target).length >= 3; 
+    
+    // Gatilhos de Aceleração (Momentum)
     const G_Momentum = window3.filter(s => s.column === target).length >= 2; 
-    const G_Streak = history[0].column === target && history[1].column === target; 
-    const G_HotZone = getColPercentage(target, 10) >= 40; 
-    const G_Eco = window5.filter(s => s.column === target).length >= 2; 
+    const G_Burst = window2.every(s => s.column === target); // Sequência imediata
+    const G_Eco = window8.filter(s => s.column === target).length >= 3; 
 
-    // BLOQUEIOS
+    // BLOQUEIOS (Apenas os críticos)
     const otherColStreak = [1, 2, 3].filter(c => c !== target).some(c => window3.every(s => s.column === c));
-    const zeroCount = window5.filter(s => s.column === 0).length;
-    const zeroBloq = zeroCount >= 2;
-    let absenceCount = 0;
-    for (let i = 0; i < Math.min(history.length, 10); i++) {
-      if (history[i].column === target) break;
-      absenceCount++;
-    }
-    const absenceBloq = absenceCount >= 5;
-
-    // CHECKLIST STATUS
-    const spinsSinceLastSignal = history.length - signal.lastSignalSpinCount;
-    // Se estiver em pausa, o cooldown de 20 spins não se aplica (pois é continuação do mesmo ciclo)
-    const cooldownOK = signal.isPaused || signal.isAwaitingResult || signal.lastSignalSpinCount === 0 || spinsSinceLastSignal >= 20;
+    const zeroBloq = history.slice(0, 4).filter(s => s.column === 0).length >= 2;
     
-    const noBlocks = !otherColStreak && !zeroBloq && !absenceBloq;
-    
-    // REGRA DE OURO
-    const mandatoryOK = C1_Dominance && G_Pressure && noBlocks && cooldownOK;
-    const optionalOK = G_Continuity || G_Momentum || G_Streak || G_HotZone || G_Eco;
+    // REGRA DE OURO ATUALIZADA (Sem Cooldown)
+    const mandatoryOK = C1_Dominance && G_Pressure && !otherColStreak && !zeroBloq;
+    const optionalOK = G_Momentum || G_Burst || G_Eco || (perc10 > perc20);
 
     const isValid = mandatoryOK && optionalOK;
 
     // Feedback Visual
-    const perc10 = getColPercentage(target, 10);
-    const perc20 = getColPercentage(target, 20);
     const trend = perc10 > perc20 ? 'Subindo' : perc10 < perc20 ? 'Descendo' : 'Estável';
-    const patternStrength = Math.min(100, (perc20 * 1.5) + (G_Pressure ? 20 : 0));
+    const patternStrength = Math.min(100, (perc10 * 1.8) + (G_Pressure ? 10 : 0));
 
     return {
-      target, isValid, trend, patternStrength, zeroCount, absenceCount,
+      target, isValid, trend, patternStrength, 
       triggers: { 
-        C1_Dominance, G_Pressure, G_Continuity, G_Momentum, G_Streak, G_HotZone, G_Eco 
+        C1_Dominance, G_Pressure, G_Momentum, G_Burst, G_Eco 
       },
-      blocks: { otherColStreak, zeroBloq, absenceBloq, cooldownOK, noBlocks },
-      spinsToNext: Math.max(0, 20 - spinsSinceLastSignal)
+      blocks: { otherColStreak, zeroBloq, noBlocks: !otherColStreak && !zeroBloq }
     };
-  }, [history, signal.lastSignalSpinCount, signal.isPaused, signal.isAwaitingResult]);
+  }, [history, signal.isPaused, signal.isAwaitingResult]);
 
   useEffect(() => {
     if (!isSessionStarted || history.length === 0) return;
     const latest = history[0];
     const spinCount = history.length;
 
-    // 1. Processa o resultado do giro anterior
     if (signal.isAwaitingResult && !signal.showOverlay && !signal.isPaused && spinCount !== lastProcessedSpinCount.current) {
       lastProcessedSpinCount.current = spinCount;
       
       if (latest.column === signal.targetColumn) {
-        // WIN -> Reseta ciclo
         const betValue = progressionLevels[signal.progressionStep - 1];
         const winValue = betValue * 3;
         const profit = winValue - signal.investedInCycle;
@@ -243,12 +223,10 @@ const App: React.FC = () => {
         audioService.playWin();
         setTimeout(() => setShowResult(null), 3000);
       } else {
-        // LOSS -> Pausa ciclo para aguardar nova análise (pode ser outra coluna)
         if (signal.progressionStep < 5) {
           setSignal(prev => ({ ...prev, progressionStep: prev.progressionStep + 1, isPaused: true }));
           audioService.playObservation();
         } else {
-          // RED FINAL
           setStats(prev => ({ ...prev, losses: prev.losses + 1, totalEntries: prev.totalEntries + 1, dailyPercentage: ((prev.currentBank - initialBank) / initialBank) * 100 }));
           setSignal(prev => ({ ...prev, isAwaitingResult: false, progressionStep: 0, investedInCycle: 0, targetColumn: null, lastSignalSpinCount: history.length, isPaused: false }));
           setShowResult({ type: 'LOSS', value: signal.investedInCycle });
@@ -259,20 +237,15 @@ const App: React.FC = () => {
       return;
     }
 
-    // 2. Retomada de Ciclo Pausado (Adaptação de Coluna)
-    // Se o ciclo está em pausa e QUALQUER coluna (detectada no analysis.target) satisfizer a checklist, retoma.
+    // Retomada Rápida
     if (signal.isPaused && analysis?.isValid) {
       setSignal(prev => ({ 
-        ...prev, 
-        isPaused: false, 
-        showOverlay: true, 
-        status: SystemStatus.AUTHORIZED,
-        targetColumn: analysis.target, // Atualiza para a nova coluna detectada
-        signalHealth: Math.round(analysis.patternStrength)
+        ...prev, isPaused: false, showOverlay: true, status: SystemStatus.AUTHORIZED,
+        targetColumn: analysis.target, signalHealth: Math.round(analysis.patternStrength)
       }));
     }
 
-    // 3. Emissão de Novo Sinal (Início de Ciclo)
+    // Novo Sinal Ultra-Sniper
     if (!signal.isAwaitingResult && !signal.isPaused && analysis?.isValid) {
       setSignal(prev => ({
         ...prev, status: SystemStatus.AUTHORIZED, targetColumn: analysis.target,
@@ -281,7 +254,7 @@ const App: React.FC = () => {
       }));
       audioService.playObservation();
     } else if (!signal.isAwaitingResult && !signal.isPaused) {
-      const hasBlock = analysis?.blocks.zeroBloq || analysis?.blocks.otherColStreak || analysis?.blocks.absenceBloq || !analysis?.blocks.cooldownOK;
+      const hasBlock = !analysis?.blocks.noBlocks;
       setSignal(prev => ({ 
         ...prev, status: hasBlock ? SystemStatus.OBSERVATION : SystemStatus.NO_SIGNAL 
       }));
@@ -351,18 +324,18 @@ const App: React.FC = () => {
               <div className={`w-4 h-4 rounded-full ${signal.status === SystemStatus.AUTHORIZED ? 'bg-emerald-500 animate-pulse shadow-[0_0_15px_#10b981]' : signal.status === SystemStatus.OBSERVATION ? 'bg-amber-500' : 'bg-rose-500'}`} />
               <div className="flex flex-col">
                  <span className={`text-[12px] font-black uppercase tracking-widest ${signal.status === SystemStatus.AUTHORIZED ? 'text-neon-green' : signal.status === SystemStatus.OBSERVATION ? 'text-neon-amber' : 'text-neon-red'}`}>{signal.status}</span>
-                 <span className="text-[9px] font-bold text-slate-600 uppercase">Sistema de Monitoramento</span>
+                 <span className="text-[9px] font-bold text-slate-600 uppercase">Motor Sniper v3.0</span>
               </div>
            </div>
            <div className="flex gap-12">
-              <HeaderMetric label="Alvo Ativo" value={signal.targetColumn ? `COLUNA ${signal.targetColumn}` : '--'} color="text-emerald-400" />
+              <HeaderMetric label="Alvo Atual" value={signal.targetColumn ? `COLUNA ${signal.targetColumn}` : '--'} color="text-emerald-400" />
               <HeaderMetric label="Banca Real" value={`R$ ${stats.currentBank.toFixed(2)}`} color="text-white" />
               <HeaderMetric label="Lucro / Preju" value={`R$ ${stats.profit.toFixed(2)}`} color={stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
            </div>
         </div>
         <div className="px-8 py-4 bg-black/40 flex items-center justify-between border-t border-slate-800/50">
            <div className="flex items-center gap-5">
-              <span className="text-[10px] font-black text-slate-500 uppercase">Progressão</span>
+              <span className="text-[10px] font-black text-slate-500 uppercase">Progressão Sniper</span>
               <div className="flex gap-2">
                  {[1, 2, 3, 4, 5].map(step => (
                    <div key={step} className={`h-2 w-10 rounded-full transition-all duration-500 ${signal.progressionStep >= step ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-slate-800'}`} />
@@ -382,35 +355,28 @@ const App: React.FC = () => {
            <section className="bg-card rounded-[28px] p-8 border border-slate-800 shadow-xl">
               <div className="flex justify-between items-center mb-6">
                 <h3 className={`text-sm font-black uppercase tracking-tight ${analysis?.isValid ? 'text-emerald-500' : 'text-slate-400'}`}>Coluna {analysis?.target} {analysis?.isValid ? '🎯 ALVO' : 'EM ANÁLISE'}</h3>
-                <span className="text-sm font-black text-emerald-400">{getColPercentage(analysis?.target || 1, 20).toFixed(1)}% ({history.slice(0, 20).filter(s => s.column === analysis?.target).length})</span>
+                <span className="text-sm font-black text-emerald-400">{getColPercentage(analysis?.target || 1, 10).toFixed(1)}% (Curto)</span>
               </div>
-              <div className="h-2 w-full bg-slate-900 rounded-full mb-8 overflow-hidden">
-                <div className="h-full bg-emerald-500 transition-all duration-1000" style={{ width: `${getColPercentage(analysis?.target || 1, 20)}%` }} />
-              </div>
-
+              
               <div className="space-y-6">
                  <div>
-                    <p className="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest">Critérios Obrigatórios</p>
-                    <ValidationItem label="Dominante ≥35%" active={!!analysis?.triggers.C1_Dominance} mandatory />
-                    <ValidationItem label="Pressão (4 de 7)" active={!!analysis?.triggers.G_Pressure} mandatory />
-                    <ValidationItem label="Sem bloqueios ativos" active={!!analysis?.blocks.noBlocks} mandatory />
-                    <ValidationItem label="Intervalo OK" active={!!analysis?.blocks.cooldownOK} mandatory />
+                    <p className="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest">Obrigatórios Sniper</p>
+                    <ValidationItem label="Dominância Rápida" active={!!analysis?.triggers.C1_Dominance} mandatory />
+                    <ValidationItem label="Pressão (3 de 5)" active={!!analysis?.triggers.G_Pressure} mandatory />
+                    <ValidationItem label="Sem Bloqueios" active={!!analysis?.blocks.noBlocks} mandatory />
                  </div>
                  
                  <div className="pt-6 border-t border-slate-800/50">
                     <p className="text-[10px] font-black text-slate-500 mb-4 tracking-widest flex justify-between uppercase">
-                       <span>Gatilhos Opcionais</span>
-                       <span className="text-[8px] opacity-40">(Pelo menos 1)</span>
+                       <span>Aceleração de Tendência</span>
                     </p>
-                    <ValidationItem label="Continuidade (2 de 4)" active={!!analysis?.triggers.G_Continuity} />
                     <ValidationItem label="Momentum (2 de 3)" active={!!analysis?.triggers.G_Momentum} />
-                    <ValidationItem label="Sequência (Streak)" active={!!analysis?.triggers.G_Streak} />
-                    <ValidationItem label="Zona Quente (>40%)" active={!!analysis?.triggers.G_HotZone} />
-                    <ValidationItem label="Eco Reaparece" active={!!analysis?.triggers.G_Eco} />
+                    <ValidationItem label="Burst Imediato" active={!!analysis?.triggers.G_Burst} />
+                    <ValidationItem label="Eco Curto (8 spins)" active={!!analysis?.triggers.G_Eco} />
                  </div>
 
                  <div className="pt-6 border-t border-slate-800/50 space-y-2">
-                    <div className="flex justify-between text-[11px] font-bold"><span className="text-slate-500">Força do padrão:</span><span className="text-emerald-400">{analysis?.patternStrength.toFixed(0)}%</span></div>
+                    <div className="flex justify-between text-[11px] font-bold"><span className="text-slate-500">Assertividade:</span><span className="text-emerald-400">{analysis?.patternStrength.toFixed(0)}%</span></div>
                     <div className="flex justify-between text-[11px] font-bold">
                        <span className="text-slate-500">Tendência:</span>
                        <span className={`flex items-center gap-1 ${analysis?.trend === 'Subindo' ? 'text-emerald-500' : 'text-rose-500'}`}>
@@ -431,8 +397,8 @@ const App: React.FC = () => {
                    <div className="bg-amber-500/20 text-amber-500 px-3 py-1 rounded-xl text-xs font-black">{signal.progressionStep}u/5u</div>
                 </div>
                 <p className="text-slate-400 text-xs font-bold leading-relaxed">
-                   Aguardando nova análise para continuar progressão G{signal.progressionStep}. 
-                   <span className="block mt-2 text-white/80 italic">O sistema irá captar o próximo sinal em qualquer coluna disponível.</span>
+                   Aguardando nova detecção de tendência para G{signal.progressionStep}. 
+                   <span className="block mt-2 text-white/80 italic">O sistema agora é ultra-rápido: entra assim que captar o próximo movimento.</span>
                 </p>
              </div>
            )}
@@ -447,7 +413,7 @@ const App: React.FC = () => {
               </div>
               <textarea className="w-full bg-black border border-slate-800 rounded-2xl p-6 text-[13px] font-mono text-white focus:border-emerald-500 outline-none h-40 mb-6 custom-scroll" placeholder="Cole os números aqui..." value={inputValue} onChange={e => setInputValue(e.target.value)} />
               <div className="flex gap-4">
-                 <button onClick={pasteNumbers} className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-black py-5 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95">Colar Números</button>
+                 <button onClick={pasteNumbers} className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-black py-5 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95">Análise Rápida</button>
                  <button onClick={() => setHistory(prev => prev.slice(1))} className="w-20 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-center text-slate-500 hover:text-rose-500 transition-all"><Trash2 size={22}/></button>
               </div>
            </section>
@@ -481,7 +447,6 @@ const App: React.FC = () => {
                            <span className="text-[9px] font-bold text-slate-600">{spin.timestamp}</span>
                         </div>
                       </div>
-                      <span className="text-[9px] font-black text-slate-900 opacity-30">#{history.length - i}</span>
                    </div>
                  ))}
               </div>
@@ -515,7 +480,7 @@ const App: React.FC = () => {
                     <p className="text-2xl font-black text-white">R$ {progressionLevels[signal.progressionStep - 1].toFixed(2)}</p>
                  </div>
                  <div className="bg-slate-900/50 p-6 rounded-3xl border border-slate-800">
-                    <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Alvo Analítico</p>
+                    <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Alvo Sniper</p>
                     <p className="text-2xl font-black text-emerald-500 uppercase">COLUNA {signal.targetColumn}</p>
                  </div>
               </div>
@@ -526,11 +491,11 @@ const App: React.FC = () => {
 
       {/* FOOTER */}
       <div className="w-full mt-12 grid grid-cols-1 md:grid-cols-4 gap-5">
-         <FooterCard icon={<TrendingUp size={20} className="text-emerald-500" />} label="Tendência" value={analysis?.trend || "ANALISANDO"} />
-         <FooterCard icon={<ShieldCheck size={20} className="text-sky-500" />} label="Bloqueios" value={analysis?.blocks.noBlocks ? "LIMPO" : "ATIVO"} />
-         <FooterCard icon={<HealthIcon size={20} className="text-emerald-400" />} label="Motor Sniper" value={analysis?.isValid ? "PRONTO" : "ANALISANDO"} />
+         <FooterCard icon={<TrendingUp size={20} className="text-emerald-500" />} label="Análise de Fluxo" value={analysis?.trend || "PRONTO"} />
+         <FooterCard icon={<ShieldCheck size={20} className="text-sky-500" />} label="Bloqueio Zero" value={analysis?.blocks.zeroBloq ? "ATIVO" : "LIMPO"} />
+         <FooterCard icon={<HealthIcon size={20} className="text-emerald-400" />} label="Assertividade" value={analysis ? `${analysis.patternStrength.toFixed(0)}%` : "--"} />
          <button onClick={handleResetSession} className="bg-slate-900/40 hover:bg-rose-500/10 border border-slate-800 text-slate-600 hover:text-rose-500 p-6 rounded-[24px] transition-all flex items-center justify-center gap-4 font-black text-[11px] uppercase tracking-widest">
-            <RotateCcw size={18} /> Limpar Tudo
+            <RotateCcw size={18} /> Resetar Sniper
          </button>
       </div>
     </div>
