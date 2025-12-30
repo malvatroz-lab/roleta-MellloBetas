@@ -7,9 +7,9 @@ import {
   BankConfig, 
   Statistics, 
   SignalState 
-} from './types';
-import { getColumn } from './constants';
-import { audioService } from './services/audioService';
+} from './types.ts';
+import { getColumn } from './constants.ts';
+import { audioService } from './services/audioService.ts';
 import { 
   Target, 
   Zap, 
@@ -92,10 +92,8 @@ const App: React.FC = () => {
 
   const [inputValue, setInputValue] = useState('');
   
-  // Ref para controlar processamento de giros únicos para não validar vitória no mesmo giro do sinal
   const lastProcessedSpinRef = useRef<number>(-1);
 
-  // Derived Values
   const unitValue = useMemo(() => {
     return Math.max(0.50, (bankInput * (riskTarget / 100)) / 20);
   }, [bankInput, riskTarget]);
@@ -162,11 +160,9 @@ const App: React.FC = () => {
     const last5 = history.slice(0, 5);
     const last7 = history.slice(0, 7);
 
-    // Bloqueios Lógicos
     const opponentStreak = last3.length === 3 && last3.every(s => s.column !== target && s.column !== 0 && s.column === last3[0].column);
     const exhaustion = last7.filter(s => s.column === target).length >= 5;
     const columnCold = last5.every(s => s.column !== target); 
-    // Regra: Zero sair 1 vez em 5 giros (Bloqueio)
     const recentZero = last5.some(s => s.column === 0);
 
     return {
@@ -190,19 +186,16 @@ const App: React.FC = () => {
     return (count / Math.max(1, window20.length)) * 100;
   }, [history]);
 
-  // Motor de Inteligência Dinâmico
   useEffect(() => {
     if (history.length === 0 || !isSessionStarted) return;
     const latest = history[0];
     const spinId = history.length;
 
-    // 1. GERENCIAMENTO DE RESULTADOS (Quando a aposta está CONFIRMADA)
     if (signal.isAwaitingResult && !signal.showOverlay) {
       if (spinId !== lastProcessedSpinRef.current) {
         lastProcessedSpinRef.current = spinId;
         
         if (latest.column === signal.targetColumn) {
-          // VITÓRIA
           const spentInCycle = progressionLevels.slice(0, signal.progressionStep).reduce((a, b) => a + b, 0);
           const winAmount = (progressionLevels[signal.progressionStep - 1] * 3);
           const winProfit = winAmount - spentInCycle;
@@ -223,11 +216,9 @@ const App: React.FC = () => {
           setTimeout(() => setShowResult(null), 3000);
           return;
         } else {
-          // MISS (ERRO NO GIRO)
           const currentMisses = signal.consecutiveMisses + 1;
           
           if (signal.progressionStep < 5) {
-            // Se houver bloqueio lógico ou perda de força durante a progressão, entra em modo Recovery
             const hasSafetyBlock = criteria && (criteria.isZeroRecent || criteria.isOpponentStrong || criteria.isCold || !criteria.dominance);
             
             if (hasSafetyBlock || currentMisses >= 2) {
@@ -236,7 +227,6 @@ const App: React.FC = () => {
                 safetyScore: 20, warningMessage: criteria?.isZeroRecent ? "FIREWALL: ZERO DETECTADO (1/5)" : "ALVO PERDEU DOMINÂNCIA. RECALIBRANDO..."
               }));
             } else {
-              // AVANÇA NÍVEL NO MESMO ALVO
               setSignal(prev => ({
                 ...prev, progressionStep: prev.progressionStep + 1, consecutiveMisses: currentMisses,
                 isPaused: false, showOverlay: true, safetyScore: Math.max(10, 100 - (prev.progressionStep * 20)),
@@ -245,7 +235,6 @@ const App: React.FC = () => {
               audioService.playObservation();
             }
           } else {
-            // RED FINAL (STOP)
             setStats(prev => ({
               ...prev, losses: prev.losses + 1, totalEntries: prev.totalEntries + 1,
               currentBank: prev.currentBank - maxLoss, profit: prev.profit - maxLoss,
@@ -260,10 +249,8 @@ const App: React.FC = () => {
       }
     }
 
-    // 2. MONITORAMENTO EM TEMPO REAL DURANTE A "AGUARDANDO CONFIRMAÇÃO"
     if (signal.showOverlay && !signal.isPaused) {
        if (criteria) {
-          // Bloqueio de Zero tem prioridade total
           if (criteria.isZeroRecent) {
              setSignal(prev => ({
                 ...prev,
@@ -293,7 +280,6 @@ const App: React.FC = () => {
        }
     }
 
-    // 3. ATUALIZAÇÃO DO MODO BUSCA (RECOVERY)
     if (signal.isPaused && signal.showOverlay) {
        if (criteria && criteria.dominance && criteria.pressure && !criteria.isCold && !criteria.isZeroRecent && !criteria.isOpponentStrong) {
           setSignal(prev => ({
@@ -308,9 +294,7 @@ const App: React.FC = () => {
        }
     }
 
-    // 4. INÍCIO DE NOVO CICLO (SCANNER LIMPO)
     if (!signal.isAwaitingResult && !signal.showOverlay && criteria) {
-      // Bloqueio total se houver Zero ou Pressão Oposta
       const canSignal = criteria.dominance && criteria.pressure && !criteria.isCold && !criteria.isZeroRecent && !criteria.isOpponentStrong;
       
       if (canSignal) {
@@ -360,7 +344,6 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen p-4 flex flex-col items-center max-w-[1400px] mx-auto overflow-x-hidden relative pb-10">
       
-      {/* RESULT OVERLAY (WIN/LOSS) */}
       {showResult && (
         <div className={`fixed inset-0 z-[300] flex flex-col items-center justify-center p-4 backdrop-blur-2xl animate-in fade-in duration-500 ${showResult.type === 'WIN' ? 'bg-emerald-950/80' : 'bg-red-950/80'}`}>
           <div className={`relative flex flex-col items-center justify-center rounded-[60px] p-16 shadow-2xl border-4 scale-up-animation ${showResult.type === 'WIN' ? 'bg-[#0a2318] border-emerald-500 shadow-emerald-500/40' : 'bg-[#230a0a] border-red-500 shadow-red-500/40'}`}>
@@ -377,7 +360,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* HEADER BAR */}
       <div className="w-full flex items-center justify-between mb-8 gap-4 px-2 mt-4">
         <div className="flex items-center gap-3">
            <div className="w-12 h-12 bg-slate-900 rounded-2xl flex items-center justify-center border border-slate-800 shadow-inner"><Activity className="text-sky-500" size={24} /></div>
@@ -397,7 +379,6 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      {/* DASHBOARD CARDS */}
       <div className="w-full grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-10">
         <StatusCard label="Alvo Atual" value={signal.targetColumn ? `COLUNA ${signal.targetColumn}` : '--'} icon={<Target size={14}/>} valueColor={signal.isPaused ? "text-amber-500" : "text-sky-400"} />
         <StatusCard label="Progresso" value={signal.progressionStep > 0 ? `NÍVEL ${signal.progressionStep}` : '---'} icon={<TrendingUp size={14}/>} valueColor={signal.progressionStep > 0 && !signal.isPaused ? 'animate-blink text-white' : 'text-slate-600'} />
@@ -407,7 +388,6 @@ const App: React.FC = () => {
         <StatusCard label="Lucro P/L" value={`R$ ${stats.profit.toFixed(2)}`} icon={<TrendingUp size={14}/>} valueColor={stats.profit >= 0 ? 'text-emerald-400' : 'text-red-400'} />
       </div>
 
-      {/* OPERATION OVERLAY (INTEGRATED & REACTIVE) */}
       {signal.showOverlay && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/95 backdrop-blur-3xl p-4 animate-in fade-in zoom-in duration-300">
            <div className={`border-[4px] rounded-[60px] p-10 max-w-4xl w-full relative grid grid-cols-1 lg:grid-cols-2 gap-10 overflow-hidden transition-all duration-700 shadow-[0_0_100px_rgba(0,0,0,0.8)] ${signal.isPaused ? 'bg-[#1a140a] border-amber-500/30' : 'bg-[#061610] border-emerald-500/30'}`}>
@@ -440,7 +420,7 @@ const App: React.FC = () => {
                  <div className="grid grid-cols-2 gap-6 w-full mb-10">
                     <div className="bg-black/50 border border-slate-800 rounded-[35px] p-8 flex flex-col items-center">
                        <p className="text-[10px] text-slate-500 font-black uppercase mb-2">Aposta (R$)</p>
-                       <p className="text-4xl font-black text-white">{progressionLevels[signal.progressionStep-1]?.toFixed(2)}</p>
+                       <p className="text-4xl font-black text-white">R$ {progressionLevels[signal.progressionStep-1]?.toFixed(2)}</p>
                     </div>
                     <div className="bg-black/50 border border-slate-800 rounded-[35px] p-8 flex flex-col items-center">
                        <p className="text-[10px] text-slate-500 font-black uppercase mb-2">Progresso</p>
@@ -498,10 +478,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* MAIN UI PANELS */}
       <div className={`w-full grid grid-cols-1 lg:grid-cols-12 gap-8 ${signal.showOverlay ? 'opacity-20 pointer-events-none blur-md' : ''} transition-all duration-500`}>
-         
-         {/* REGISTRATION PANEL */}
          <div className="lg:col-span-4 space-y-8">
             <section className="bg-card border border-accent rounded-[40px] p-8 shadow-2xl relative overflow-hidden">
                <div className="absolute top-0 right-0 p-4 opacity-5"><LayoutGrid size={80} /></div>
@@ -531,7 +508,6 @@ const App: React.FC = () => {
             </section>
          </div>
 
-         {/* SCANNER AND RESULTS */}
          <div className="lg:col-span-5 space-y-8">
             <section className="bg-card border border-accent rounded-[40px] p-8 shadow-2xl">
                <div className="flex justify-between items-center mb-10">
@@ -574,7 +550,6 @@ const App: React.FC = () => {
             </section>
          </div>
 
-         {/* CHECKLIST SIDEBAR */}
          <div className="lg:col-span-3 space-y-8">
             <section className="bg-card border border-accent rounded-[40px] p-10 h-full flex flex-col shadow-2xl relative overflow-hidden">
                <div className="absolute -top-10 -right-10 w-40 h-40 bg-sky-500/10 blur-[100px]" />
@@ -592,7 +567,6 @@ const App: React.FC = () => {
                      <CheckItem label="Fluxo de Coluna" active={!criteria?.isCold} safety />
                      <CheckItem label="Fadiga de Coluna" active={!criteria?.isExhausted} safety />
                      <CheckItem label="Zona de Seq. Oposta" active={!criteria?.isOpponentStrong} safety />
-                     {/* Regra: Zero sair 1 vez em 5 giros */}
                      <CheckItem label="Mesa Limpa (Zero 1/5)" active={!criteria?.isZeroRecent} safety />
                   </div>
                   <div className="space-y-5">
