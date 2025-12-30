@@ -38,7 +38,9 @@ import {
   Search,
   RefreshCw,
   ArrowRightLeft,
-  ChevronRight
+  ChevronRight,
+  Trash2,
+  RotateCcw
 } from 'lucide-react';
 
 // Extended Signal State for UI
@@ -79,6 +81,7 @@ const App: React.FC = () => {
     targetColumn: null,
     activeTrigger: TriggerType.NONE,
     progressionStep: 0,
+    // Fix: removed 'boolean =' from the object literal as it was a syntax error.
     isAwaitingResult: false,
     cooldownCounter: 0,
     confidence: 0,
@@ -94,6 +97,7 @@ const App: React.FC = () => {
   
   const lastProcessedSpinRef = useRef<number>(-1);
 
+  // Derived Values
   const unitValue = useMemo(() => {
     return Math.max(0.50, (bankInput * (riskTarget / 100)) / 20);
   }, [bankInput, riskTarget]);
@@ -116,6 +120,32 @@ const App: React.FC = () => {
     setIsSessionStarted(true);
   };
 
+  const handleResetSession = () => {
+    if (confirm("Deseja realmente resetar toda a sessão? Isso limpará o histórico e voltará para a tela inicial.")) {
+      setIsSessionStarted(false);
+      setHistory([]);
+      setStats({
+        wins: 0, losses: 0, totalEntries: 0, currentBank: bankInput, profit: 0, dailyPercentage: 0
+      });
+      setSignal({
+        status: SystemStatus.NO_SIGNAL,
+        targetColumn: null,
+        activeTrigger: TriggerType.NONE,
+        progressionStep: 0,
+        isAwaitingResult: false,
+        cooldownCounter: 0,
+        confidence: 0,
+        showOverlay: false,
+        lastSignalId: null,
+        safetyScore: 100,
+        warningMessage: null,
+        isPaused: false,
+        consecutiveMisses: 0
+      });
+      lastProcessedSpinRef.current = -1;
+    }
+  };
+
   const addNumber = useCallback((num: number) => {
     const newSpin: SpinResult = {
       number: num,
@@ -124,6 +154,10 @@ const App: React.FC = () => {
     };
     setHistory(prev => [newSpin, ...prev].slice(0, 1000));
   }, []);
+
+  const deleteLastNumber = () => {
+    setHistory(prev => prev.slice(1));
+  };
 
   const pasteNumbers = useCallback(() => {
     const numbers = inputValue.split(/[,\s]+/)
@@ -160,9 +194,11 @@ const App: React.FC = () => {
     const last5 = history.slice(0, 5);
     const last7 = history.slice(0, 7);
 
+    // Bloqueios Lógicos
     const opponentStreak = last3.length === 3 && last3.every(s => s.column !== target && s.column !== 0 && s.column === last3[0].column);
     const exhaustion = last7.filter(s => s.column === target).length >= 5;
     const columnCold = last5.every(s => s.column !== target); 
+    // Regra: Zero sair 1 vez em 5 giros (Bloqueio)
     const recentZero = last5.some(s => s.column === 0);
 
     return {
@@ -186,16 +222,19 @@ const App: React.FC = () => {
     return (count / Math.max(1, window20.length)) * 100;
   }, [history]);
 
+  // Motor de Inteligência Dinâmico
   useEffect(() => {
     if (history.length === 0 || !isSessionStarted) return;
     const latest = history[0];
     const spinId = history.length;
 
+    // 1. GERENCIAMENTO DE RESULTADOS (Quando a aposta está CONFIRMADA)
     if (signal.isAwaitingResult && !signal.showOverlay) {
       if (spinId !== lastProcessedSpinRef.current) {
         lastProcessedSpinRef.current = spinId;
         
         if (latest.column === signal.targetColumn) {
+          // VITÓRIA
           const spentInCycle = progressionLevels.slice(0, signal.progressionStep).reduce((a, b) => a + b, 0);
           const winAmount = (progressionLevels[signal.progressionStep - 1] * 3);
           const winProfit = winAmount - spentInCycle;
@@ -216,9 +255,11 @@ const App: React.FC = () => {
           setTimeout(() => setShowResult(null), 3000);
           return;
         } else {
+          // MISS (ERRO NO GIRO)
           const currentMisses = signal.consecutiveMisses + 1;
           
           if (signal.progressionStep < 5) {
+            // Se houver bloqueio lógico ou perda de força durante a progressão, entra em modo Recovery
             const hasSafetyBlock = criteria && (criteria.isZeroRecent || criteria.isOpponentStrong || criteria.isCold || !criteria.dominance);
             
             if (hasSafetyBlock || currentMisses >= 2) {
@@ -227,6 +268,7 @@ const App: React.FC = () => {
                 safetyScore: 20, warningMessage: criteria?.isZeroRecent ? "FIREWALL: ZERO DETECTADO (1/5)" : "ALVO PERDEU DOMINÂNCIA. RECALIBRANDO..."
               }));
             } else {
+              // AVANÇA NÍVEL NO MESMO ALVO
               setSignal(prev => ({
                 ...prev, progressionStep: prev.progressionStep + 1, consecutiveMisses: currentMisses,
                 isPaused: false, showOverlay: true, safetyScore: Math.max(10, 100 - (prev.progressionStep * 20)),
@@ -235,6 +277,7 @@ const App: React.FC = () => {
               audioService.playObservation();
             }
           } else {
+            // RED FINAL (STOP)
             setStats(prev => ({
               ...prev, losses: prev.losses + 1, totalEntries: prev.totalEntries + 1,
               currentBank: prev.currentBank - maxLoss, profit: prev.profit - maxLoss,
@@ -249,8 +292,10 @@ const App: React.FC = () => {
       }
     }
 
+    // 2. MONITORAMENTO EM TEMPO REAL DURANTE A "AGUARDANDO CONFIRMAÇÃO"
     if (signal.showOverlay && !signal.isPaused) {
        if (criteria) {
+          // Bloqueio de Zero tem prioridade total
           if (criteria.isZeroRecent) {
              setSignal(prev => ({
                 ...prev,
@@ -280,6 +325,7 @@ const App: React.FC = () => {
        }
     }
 
+    // 3. ATUALIZAÇÃO DO MODO BUSCA (RECOVERY)
     if (signal.isPaused && signal.showOverlay) {
        if (criteria && criteria.dominance && criteria.pressure && !criteria.isCold && !criteria.isZeroRecent && !criteria.isOpponentStrong) {
           setSignal(prev => ({
@@ -294,7 +340,9 @@ const App: React.FC = () => {
        }
     }
 
+    // 4. INÍCIO DE NOVO CICLO (SCANNER LIMPO)
     if (!signal.isAwaitingResult && !signal.showOverlay && criteria) {
+      // Bloqueio total se houver Zero ou Pressão Oposta
       const canSignal = criteria.dominance && criteria.pressure && !criteria.isCold && !criteria.isZeroRecent && !criteria.isOpponentStrong;
       
       if (canSignal) {
@@ -319,8 +367,8 @@ const App: React.FC = () => {
              <div className="w-20 h-20 bg-[#1a4431] rounded-[30px] flex items-center justify-center mb-6 shadow-neon-green">
                 <ShieldCheck className="text-[#00ff88]" size={40} />
              </div>
-             <h1 className="text-3xl font-black text-white mb-2 italic">Sniper <span className="text-sky-400">Recovery 2.8</span></h1>
-             <p className="text-slate-400 text-sm mb-10 leading-relaxed uppercase tracking-widest font-black text-[9px] opacity-60">IA Antirred v5.4 - Zero Block</p>
+             <h1 className="text-2xl font-black text-white mb-2 italic leading-tight">MelloBetas <span className="text-sky-400">Analise de roleta coluna Unica 3,0</span></h1>
+             <p className="text-slate-400 text-sm mb-10 leading-relaxed uppercase tracking-widest font-black text-[9px] opacity-60">MelloBetas AI - Zero Block Pro</p>
              <div className="w-full space-y-8">
                 <div className="bg-[#06090f] border border-[#1e293b] rounded-3xl p-6">
                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-4">Banca Inicial (R$)</label>
@@ -332,7 +380,7 @@ const App: React.FC = () => {
                    ))}
                 </div>
                 <button onClick={handleStartSession} className="w-full bg-[#00ff88] hover:bg-[#00cc6e] text-slate-950 py-5 rounded-2xl font-black text-lg transition-all shadow-lg active:scale-95 flex items-center justify-center gap-3">
-                   <Rocket size={20} /> Iniciar Firewall Sniper
+                   <Rocket size={20} /> Ativar Estratégia MelloBetas
                 </button>
              </div>
           </div>
@@ -344,6 +392,7 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen p-4 flex flex-col items-center max-w-[1400px] mx-auto overflow-x-hidden relative pb-10">
       
+      {/* RESULT OVERLAY (WIN/LOSS) */}
       {showResult && (
         <div className={`fixed inset-0 z-[300] flex flex-col items-center justify-center p-4 backdrop-blur-2xl animate-in fade-in duration-500 ${showResult.type === 'WIN' ? 'bg-emerald-950/80' : 'bg-red-950/80'}`}>
           <div className={`relative flex flex-col items-center justify-center rounded-[60px] p-16 shadow-2xl border-4 scale-up-animation ${showResult.type === 'WIN' ? 'bg-[#0a2318] border-emerald-500 shadow-emerald-500/40' : 'bg-[#230a0a] border-red-500 shadow-red-500/40'}`}>
@@ -360,25 +409,39 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* HEADER BAR */}
       <div className="w-full flex items-center justify-between mb-8 gap-4 px-2 mt-4">
         <div className="flex items-center gap-3">
            <div className="w-12 h-12 bg-slate-900 rounded-2xl flex items-center justify-center border border-slate-800 shadow-inner"><Activity className="text-sky-500" size={24} /></div>
-           <div><h4 className="text-white font-black text-base uppercase tracking-tighter">Sniper Recovery</h4><p className="text-slate-500 text-[9px] font-black uppercase tracking-widest">v5.4 FIREWALL LIVE</p></div>
+           <div><h4 className="text-white font-black text-base uppercase tracking-tighter">MelloBetas Analise</h4><p className="text-slate-500 text-[9px] font-black uppercase tracking-widest">v3.0 COLUNA UNICA</p></div>
         </div>
-        <div className={`px-12 py-3.5 rounded-[22px] font-black text-xs border shadow-2xl transition-all duration-700 flex items-center gap-4 ${
-          signal.isPaused || criteria?.isZeroRecent ? 'bg-amber-500/10 border-amber-500 text-amber-500' :
-          signal.status === SystemStatus.AUTHORIZED ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400' :
-          'bg-slate-900 border-slate-800 text-slate-600'
-        }`}>
-           <div className={`w-3 h-3 rounded-full ${signal.isPaused || criteria?.isZeroRecent ? 'bg-amber-500 animate-pulse' : signal.status === SystemStatus.AUTHORIZED ? 'bg-emerald-500 animate-pulse' : 'bg-slate-700'}`} />
-           {criteria?.isZeroRecent ? 'BLOQUEIO: ZERO DETECTADO' : signal.isPaused ? 'MODO RECOVERY: BUSCANDO ALVO' : signal.status}
+        
+        <div className="flex items-center gap-3">
+          <div className={`px-8 py-3.5 rounded-[22px] font-black text-xs border shadow-2xl transition-all duration-700 flex items-center gap-4 ${
+            signal.isPaused || criteria?.isZeroRecent ? 'bg-amber-500/10 border-amber-500 text-amber-500' :
+            signal.status === SystemStatus.AUTHORIZED ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400' :
+            'bg-slate-900 border-slate-800 text-slate-600'
+          }`}>
+            <div className={`w-3 h-3 rounded-full ${signal.isPaused || criteria?.isZeroRecent ? 'bg-amber-500 animate-pulse' : signal.status === SystemStatus.AUTHORIZED ? 'bg-emerald-500 animate-pulse' : 'bg-slate-700'}`} />
+            {criteria?.isZeroRecent ? 'BLOQUEIO: ZERO DETECTADO' : signal.isPaused ? 'MODO RECOVERY: BUSCANDO ALVO' : signal.status}
+          </div>
+          
+          <button 
+            onClick={handleResetSession}
+            className="w-12 h-12 bg-red-500/10 hover:bg-red-500 hover:text-white transition-all rounded-2xl flex items-center justify-center border border-red-500/20 text-red-500 shadow-lg"
+            title="Resetar Sessão"
+          >
+            <RotateCcw size={20} />
+          </button>
         </div>
+
         <div className="flex items-center gap-4 bg-slate-900/50 p-2 pr-6 rounded-2xl border border-slate-800">
            <div className="w-12 h-12 bg-emerald-500/10 rounded-xl flex items-center justify-center border border-emerald-500/20"><Wallet className="text-emerald-400" size={24} /></div>
            <div><p className="text-[10px] text-slate-500 font-black uppercase">Banca</p><p className="text-xl font-black text-white">R$ {stats.currentBank.toFixed(2)}</p></div>
         </div>
       </div>
 
+      {/* DASHBOARD CARDS */}
       <div className="w-full grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-10">
         <StatusCard label="Alvo Atual" value={signal.targetColumn ? `COLUNA ${signal.targetColumn}` : '--'} icon={<Target size={14}/>} valueColor={signal.isPaused ? "text-amber-500" : "text-sky-400"} />
         <StatusCard label="Progresso" value={signal.progressionStep > 0 ? `NÍVEL ${signal.progressionStep}` : '---'} icon={<TrendingUp size={14}/>} valueColor={signal.progressionStep > 0 && !signal.isPaused ? 'animate-blink text-white' : 'text-slate-600'} />
@@ -388,6 +451,7 @@ const App: React.FC = () => {
         <StatusCard label="Lucro P/L" value={`R$ ${stats.profit.toFixed(2)}`} icon={<TrendingUp size={14}/>} valueColor={stats.profit >= 0 ? 'text-emerald-400' : 'text-red-400'} />
       </div>
 
+      {/* OPERATION OVERLAY (INTEGRATED & REACTIVE) */}
       {signal.showOverlay && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/95 backdrop-blur-3xl p-4 animate-in fade-in zoom-in duration-300">
            <div className={`border-[4px] rounded-[60px] p-10 max-w-4xl w-full relative grid grid-cols-1 lg:grid-cols-2 gap-10 overflow-hidden transition-all duration-700 shadow-[0_0_100px_rgba(0,0,0,0.8)] ${signal.isPaused ? 'bg-[#1a140a] border-amber-500/30' : 'bg-[#061610] border-emerald-500/30'}`}>
@@ -399,9 +463,9 @@ const App: React.FC = () => {
                     </div>
                     <div className="text-left">
                        <h2 className={`text-5xl font-black uppercase tracking-tighter italic ${signal.isPaused ? 'text-amber-500' : 'text-white'}`}>
-                         {signal.isPaused ? 'Recovery' : `Sniper N${signal.progressionStep}`}
+                         {signal.isPaused ? 'Recovery' : `MelloBetas N${signal.progressionStep}`}
                        </h2>
-                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{signal.isPaused ? 'Firewall: Proteção Ativa' : 'Confirmado: Gatilho Sniper'}</p>
+                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{signal.isPaused ? 'Firewall: Proteção Ativa' : 'Confirmado: Gatilho MelloBetas'}</p>
                     </div>
                  </div>
 
@@ -478,7 +542,10 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* MAIN UI PANELS */}
       <div className={`w-full grid grid-cols-1 lg:grid-cols-12 gap-8 ${signal.showOverlay ? 'opacity-20 pointer-events-none blur-md' : ''} transition-all duration-500`}>
+         
+         {/* REGISTRATION PANEL */}
          <div className="lg:col-span-4 space-y-8">
             <section className="bg-card border border-accent rounded-[40px] p-8 shadow-2xl relative overflow-hidden">
                <div className="absolute top-0 right-0 p-4 opacity-5"><LayoutGrid size={80} /></div>
@@ -488,9 +555,18 @@ const App: React.FC = () => {
                     <button key={n} onClick={() => addNumber(n)} className={`aspect-square text-[10px] font-black rounded-xl border-2 transition-all flex items-center justify-center ${n === 0 ? 'bg-emerald-600 border-emerald-400 text-white' : 'bg-slate-900 border-slate-800 text-white'} hover:border-sky-500`}>{n}</button>
                   ))}
                </div>
-               <div className="flex gap-3">
-                  <input className="flex-1 bg-slate-950 border-2 border-slate-800 rounded-2xl p-4 text-sm text-white focus:outline-none focus:border-sky-500 transition-all font-bold" placeholder="Ex: 1, 32, 14, 0..." value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && pasteNumbers()}/>
-                  <button onClick={pasteNumbers} className="bg-sky-600 hover:bg-sky-500 px-8 rounded-2xl text-xs font-black transition-colors uppercase text-white shadow-xl">Analisar</button>
+               <div className="flex flex-col gap-4">
+                  <div className="flex gap-3">
+                    <input className="flex-1 bg-slate-950 border-2 border-slate-800 rounded-2xl p-4 text-sm text-white focus:outline-none focus:border-sky-500 transition-all font-bold" placeholder="Ex: 1, 32, 14, 0..." value={inputValue} onChange={(e) => setInputValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && pasteNumbers()}/>
+                    <button onClick={pasteNumbers} className="bg-sky-600 hover:bg-sky-500 px-8 rounded-2xl text-xs font-black transition-colors uppercase text-white shadow-xl">Analisar</button>
+                  </div>
+                  <button 
+                    onClick={deleteLastNumber}
+                    disabled={history.length === 0}
+                    className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-black uppercase hover:bg-red-500 hover:text-white transition-all disabled:opacity-30"
+                  >
+                    <Trash2 size={16} /> Excluir Último Número
+                  </button>
                </div>
             </section>
 
@@ -504,10 +580,16 @@ const App: React.FC = () => {
                        <span className="text-[9px] text-slate-600 font-mono">{spin.timestamp}</span>
                     </div>
                   ))}
+                  {history.length === 0 && (
+                    <div className="p-10 text-center text-slate-600 font-black uppercase text-[10px] tracking-widest">
+                      Nenhum número registrado
+                    </div>
+                  )}
                </div>
             </section>
          </div>
 
+         {/* SCANNER AND RESULTS */}
          <div className="lg:col-span-5 space-y-8">
             <section className="bg-card border border-accent rounded-[40px] p-8 shadow-2xl">
                <div className="flex justify-between items-center mb-10">
@@ -529,7 +611,7 @@ const App: React.FC = () => {
             </section>
 
             <section className="bg-card border border-accent rounded-[40px] p-10 shadow-2xl">
-               <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest mb-10 flex items-center gap-4"><Trophy className="text-emerald-500" size={24} /> Performance Estratégica</h3>
+               <h3 className="text-xs font-black text-slate-500 uppercase tracking-widest mb-10 flex items-center gap-4"><Trophy className="text-emerald-500" size={24} /> Performance MelloBetas</h3>
                <div className="grid grid-cols-2 gap-6">
                   <ResultStat label="Saldo Atual" value={`R$ ${stats.currentBank.toFixed(2)}`} />
                   <ResultStat label="Lucro P/L" value={`R$ ${stats.profit.toFixed(2)}`} isPositive={stats.profit >= 0} />
@@ -545,11 +627,12 @@ const App: React.FC = () => {
                        ))}
                     </div>
                   </div>
-                  <div className="text-right"><p className="text-5xl font-black text-white italic tracking-tighter">SNIPER <span className="text-sky-500">PRO</span></p></div>
+                  <div className="text-right"><p className="text-5xl font-black text-white italic tracking-tighter">MELLO<span className="text-sky-500">BETAS</span></p></div>
                </div>
             </section>
          </div>
 
+         {/* CHECKLIST SIDEBAR */}
          <div className="lg:col-span-3 space-y-8">
             <section className="bg-card border border-accent rounded-[40px] p-10 h-full flex flex-col shadow-2xl relative overflow-hidden">
                <div className="absolute -top-10 -right-10 w-40 h-40 bg-sky-500/10 blur-[100px]" />
@@ -591,7 +674,7 @@ const App: React.FC = () => {
                         <CheckCircle2 size={30} className="text-emerald-500 mt-1" />
                         <div className="flex flex-col">
                            <span className="text-[11px] font-black text-emerald-400 uppercase mb-2 tracking-widest italic">Análise Estável</span>
-                           <span className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">Padrão de assertividade IA confirmado pelo Firewall.</span>
+                           <span className="text-[10px] font-bold text-slate-500 uppercase leading-relaxed">Padrão de assertividade IA confirmed pelo Firewall.</span>
                         </div>
                      </div>
                   )}
