@@ -26,17 +26,13 @@ import {
   Zap,
   Copy,
   Check,
-  Percent
+  Target
 } from 'lucide-react';
 
 interface ExtendedSignalState extends SignalState {
   showOverlay: boolean;
   investedInCycle: number;
   signalHealth: number; 
-  dynamicWarning: string | null;
-  cautionLevel: 'NORMAL' | 'CAUTION' | 'DANGER';
-  isStrongSignal: boolean;
-  lastSignalSpinCount: number;
   isPaused: boolean; 
 }
 
@@ -64,10 +60,6 @@ const App: React.FC = () => {
     showOverlay: false,
     investedInCycle: 0,
     signalHealth: 0,
-    dynamicWarning: null,
-    cautionLevel: 'NORMAL',
-    isStrongSignal: false,
-    lastSignalSpinCount: 0,
     isPaused: false
   });
 
@@ -109,10 +101,6 @@ const App: React.FC = () => {
         showOverlay: false,
         investedInCycle: 0,
         signalHealth: 0,
-        dynamicWarning: null,
-        cautionLevel: 'NORMAL',
-        isStrongSignal: false,
-        lastSignalSpinCount: 0,
         isPaused: false
       });
     }
@@ -160,53 +148,55 @@ const App: React.FC = () => {
   }, [history]);
 
   const analysis = useMemo(() => {
-    if (history.length < 8) return null;
+    if (history.length < 5) return null;
 
+    // Identifica a coluna com maior "calor" imediato
     let target = 1;
-    const p1_short = getColPercentage(1, 10);
-    const p2_short = getColPercentage(2, 10);
-    const p3_short = getColPercentage(3, 10);
-    if (p2_short > p1_short && p2_short > p3_short) target = 2;
-    if (p3_short > p1_short && p3_short > p2_short) target = 3;
+    const p1_heat = getColPercentage(1, 8);
+    const p2_heat = getColPercentage(2, 8);
+    const p3_heat = getColPercentage(3, 8);
+    if (p2_heat > p1_heat && p2_heat > p3_heat) target = 2;
+    if (p3_heat > p1_heat && p3_heat > p2_heat) target = 3;
 
-    // Lógica Anti-Abandono: Trava de alvo durante ciclo
+    // Manter alvo em ciclo (Anti-Abandono)
     if (signal.isPaused && signal.targetColumn) {
-      const currentTargetPerf = getColPercentage(signal.targetColumn, 10);
-      const bestNewPerf = Math.max(p1_short, p2_short, p3_short);
-      if (currentTargetPerf >= 25 || (bestNewPerf - currentTargetPerf < 15)) {
-        target = signal.targetColumn;
-      }
+      target = signal.targetColumn;
     }
 
     const window3 = history.slice(0, 3);
     const window5 = history.slice(0, 5);
+    const window10 = history.slice(0, 10);
 
+    // CRITÉRIOS SNIPER v3.2
     const perc20 = getColPercentage(target, 20);
     const perc10 = getColPercentage(target, 10);
     
-    // Assertividade Sniper Pro
-    const C1_Dominance = (perc10 >= 40 && perc20 >= 30) || (perc10 >= 50); 
-    const G_Pressure = history.slice(0, 6).filter(s => s.column === target).length >= 3; 
-    const G_Momentum = window3.some(s => s.column === target); 
+    // Regra de Ouro: A coluna alvo DEVE ter aparecido nos últimos 2 giros para ser válida (Momentum)
+    const momentumActive = history.slice(0, 2).some(s => s.column === target);
+    
+    // Dominância Pro: 40% no curto ou 35% com viés de alta
+    const dominanceOK = perc10 >= 40 || (perc10 >= 30 && perc10 >= perc20);
+    
+    // Pressão: Pelo menos 2 em 4 giros (Entrada agressiva)
+    const pressureOK = history.slice(0, 4).filter(s => s.column === target).length >= 2;
 
-    // BLOQUEIOS OTIMIZADOS
-    const saturationBloq = window3.every(s => s.column === target);
-    const zeroBloq = window5.filter(s => s.column === 0).length >= 2;
-    const otherColStreak = [1, 2, 3].filter(c => c !== target).some(c => history.slice(0, 4).every(s => s.column === c));
+    // BLOQUEIOS (Reduzidos para não perder "trens" de repetição)
+    // Só bloqueia se for EXTREMO (5 seguidas de outra coluna)
+    const otherColStreak = [1, 2, 3].filter(c => c !== target).some(c => history.slice(0, 5).every(s => s.column === c));
+    // Bloqueio de Zero: Se saiu zero no último ou penúltimo giro
+    const zeroBloq = history.slice(0, 2).some(s => s.column === 0);
+    // Bloqueio de Hiato: Se a coluna sumiu por mais de 5 giros durante um ciclo
+    const hiatusBloq = signal.isPaused && history.slice(0, 5).every(s => s.column !== target);
 
-    const noBlocks = !saturationBloq && !zeroBloq && !otherColStreak;
-    const mandatoryOK = C1_Dominance && G_Pressure && G_Momentum && noBlocks;
+    const noBlocks = !otherColStreak && !zeroBloq && !hiatusBloq;
+    const mandatoryOK = dominanceOK && pressureOK && momentumActive && noBlocks;
 
-    const trendUp = perc10 > perc20;
-    const highVolume = history.slice(0, 12).filter(s => s.column === target).length >= 5;
-    const isValid = mandatoryOK && (trendUp || highVolume);
-
-    const patternStrength = Math.min(100, (perc10 * 1.5) + (trendUp ? 15 : 0) + (highVolume ? 10 : 0));
+    const patternStrength = Math.min(100, (perc10 * 1.6) + (pressureOK ? 15 : 0));
 
     return {
-      target, isValid, trend: trendUp ? 'Subindo' : 'Estável', patternStrength,
-      triggers: { C1_Dominance, G_Pressure, G_Momentum, trendUp, highVolume },
-      blocks: { saturationBloq, zeroBloq, otherColStreak, noBlocks }
+      target, isValid: mandatoryOK, trend: perc10 >= perc20 ? 'Subindo' : 'Estável', patternStrength,
+      triggers: { dominanceOK, pressureOK, momentumActive },
+      blocks: { otherColStreak, zeroBloq, hiatusBloq, noBlocks }
     };
   }, [history, signal.isPaused, signal.targetColumn]);
 
@@ -215,12 +205,21 @@ const App: React.FC = () => {
     const latest = history[0];
     const spinCount = history.length;
 
+    // Monitor de Hiato (Segurança Extra)
+    if (signal.isPaused && analysis?.blocks.hiatusBloq) {
+      setSignal(prev => ({ ...prev, isPaused: false, isAwaitingResult: false, progressionStep: 0, status: SystemStatus.NO_SIGNAL, targetColumn: null }));
+      audioService.playLoss(); // Alerta de cancelamento
+      return;
+    }
+
     if (signal.isAwaitingResult && !signal.showOverlay && !signal.isPaused && spinCount !== lastProcessedSpinCount.current) {
       lastProcessedSpinCount.current = spinCount;
       
       if (latest.column === signal.targetColumn) {
+        // VITÓRIA
         const betValue = progressionLevels[signal.progressionStep - 1];
         const winValue = betValue * 3;
+        const netWin = winValue - signal.investedInCycle;
         const newBank = stats.currentBank + winValue;
         
         setStats(prev => ({
@@ -232,15 +231,18 @@ const App: React.FC = () => {
           dailyPercentage: ((newBank - initialBank) / initialBank) * 100
         }));
         
-        setSignal(prev => ({ ...prev, isAwaitingResult: false, progressionStep: 0, investedInCycle: 0, status: SystemStatus.NO_SIGNAL, targetColumn: null, lastSignalSpinCount: history.length, isPaused: false }));
-        setShowResult({ type: 'WIN', value: winValue - betValue });
+        setSignal(prev => ({ ...prev, isAwaitingResult: false, progressionStep: 0, investedInCycle: 0, status: SystemStatus.NO_SIGNAL, targetColumn: null, isPaused: false }));
+        setShowResult({ type: 'WIN', value: netWin });
         audioService.playWin();
         setTimeout(() => setShowResult(null), 3000);
       } else {
+        // LOSS MOMENTÂNEO
         if (signal.progressionStep < 5) {
           setSignal(prev => ({ ...prev, progressionStep: prev.progressionStep + 1, isPaused: true }));
           audioService.playObservation();
         } else {
+          // RED FINAL
+          const finalLoss = signal.investedInCycle;
           setStats(prev => ({ 
             ...prev, 
             losses: prev.losses + 1, 
@@ -248,8 +250,8 @@ const App: React.FC = () => {
             profit: prev.currentBank - initialBank,
             dailyPercentage: ((prev.currentBank - initialBank) / initialBank) * 100
           }));
-          setSignal(prev => ({ ...prev, isAwaitingResult: false, progressionStep: 0, investedInCycle: 0, targetColumn: null, lastSignalSpinCount: history.length, isPaused: false }));
-          setShowResult({ type: 'LOSS', value: signal.investedInCycle });
+          setSignal(prev => ({ ...prev, isAwaitingResult: false, progressionStep: 0, investedInCycle: 0, targetColumn: null, isPaused: false }));
+          setShowResult({ type: 'LOSS', value: finalLoss });
           audioService.playLoss();
           setTimeout(() => setShowResult(null), 3000);
         }
@@ -257,13 +259,15 @@ const App: React.FC = () => {
       return;
     }
 
+    // Retomada de Gale
     if (signal.isPaused && analysis?.isValid) {
       setSignal(prev => ({ 
         ...prev, isPaused: false, showOverlay: true, status: SystemStatus.AUTHORIZED,
-        targetColumn: analysis.target, signalHealth: Math.round(analysis.patternStrength)
+        signalHealth: Math.round(analysis.patternStrength)
       }));
     }
 
+    // Novo Sinal
     if (!signal.isAwaitingResult && !signal.isPaused && analysis?.isValid) {
       setSignal(prev => ({
         ...prev, status: SystemStatus.AUTHORIZED, targetColumn: analysis.target,
@@ -295,22 +299,22 @@ const App: React.FC = () => {
              <div className="w-20 h-20 bg-emerald-500/10 rounded-3xl flex items-center justify-center mb-8 border border-emerald-500/20">
                 <ShieldCheck className="text-emerald-500" size={40} />
              </div>
-             <h1 className="text-3xl font-black mb-2 tracking-tight">MelloBetas <span className="text-emerald-500">3.0</span></h1>
-             <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] mb-10">Advanced Sniper Engine</p>
+             <h1 className="text-3xl font-black mb-2 tracking-tight">MelloBetas <span className="text-emerald-500">3.2</span></h1>
+             <p className="text-slate-500 text-[10px] font-black uppercase tracking-[0.2em] mb-10">Sniper Engine v3.2 Pro</p>
              <div className="w-full space-y-6 text-left">
                 <div className="group">
-                   <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 ml-1">Banca Inicial (R$)</label>
+                   <label className="block text-[10px] font-black text-slate-500 uppercase mb-2 ml-1">Banca de Início (R$)</label>
                    <input type="number" value={initialBank} onChange={e => setInitialBank(Number(e.target.value))} className="w-full bg-black border border-slate-800 group-focus-within:border-emerald-500 rounded-2xl py-4 px-6 font-black text-2xl outline-none transition-all" />
                 </div>
                 <div>
-                   <label className="block text-[10px] font-black text-slate-500 uppercase mb-3 ml-1">Risco p/ Sinal (% Banca)</label>
+                   <label className="block text-[10px] font-black text-slate-500 uppercase mb-3 ml-1">Exposição p/ Ciclo (% Banca)</label>
                    <div className="grid grid-cols-4 gap-3">
                       {[1, 2, 5, 10].map(p => (
                         <button key={p} onClick={() => setEntryPercent(p)} className={`py-4 rounded-2xl font-black text-xs transition-all ${entryPercent === p ? 'bg-emerald-500 text-black shadow-lg shadow-emerald-500/20' : 'bg-slate-900 text-slate-400 border border-slate-800'}`}>{p}%</button>
                       ))}
                    </div>
                 </div>
-                <button onClick={handleStartSession} className="w-full bg-emerald-500 hover:bg-emerald-400 text-black py-5 rounded-[20px] font-black text-sm uppercase transition-all shadow-xl">Ativar Sniper 3.1</button>
+                <button onClick={handleStartSession} className="w-full bg-emerald-500 hover:bg-emerald-400 text-black py-5 rounded-[20px] font-black text-sm uppercase transition-all shadow-xl">Iniciar Análise</button>
              </div>
           </div>
         </div>
@@ -322,35 +326,35 @@ const App: React.FC = () => {
     <div className="min-h-screen p-4 flex flex-col items-center max-w-7xl mx-auto pb-20">
       {showResult && (
         <div className="fixed inset-0 z-[600] flex items-center justify-center p-4 backdrop-blur-md bg-black/80 animate-in fade-in duration-300">
-          <div className={`flex flex-col items-center p-16 rounded-[48px] border-4 shadow-2xl ${showResult.type === 'WIN' ? 'bg-[#061610] border-emerald-500' : 'bg-[#160606] border-rose-500'}`}>
+          <div className={`flex flex-col items-center p-16 rounded-[48px] border-4 shadow-2xl ${showResult.type === 'WIN' ? 'bg-[#061610] border-emerald-500 shadow-emerald-500/20' : 'bg-[#160606] border-rose-500 shadow-rose-500/20'}`}>
             <div className={`p-6 rounded-full mb-8 ${showResult.type === 'WIN' ? 'bg-emerald-500 text-black' : 'bg-rose-500 text-white'}`}>
-               <Trophy size={64} />
+               {showResult.type === 'WIN' ? <Trophy size={64} /> : <XCircle size={64} />}
             </div>
-            <h2 className="text-6xl font-black text-white uppercase mb-4">{showResult.type === 'WIN' ? 'VITÓRIA' : 'LOSS'}</h2>
+            <h2 className="text-6xl font-black text-white uppercase mb-4">{showResult.type === 'WIN' ? 'GREEN' : 'RED'}</h2>
             <div className="px-12 py-4 bg-black/60 rounded-3xl text-4xl font-black text-white border border-white/5">{showResult.type === 'WIN' ? '+' : '-'} R$ {Math.abs(showResult.value).toFixed(2)}</div>
           </div>
         </div>
       )}
 
-      {/* STATUS HEADER FIXO */}
+      {/* HEADER FIXO */}
       <div className="w-full bg-card rounded-[24px] border border-slate-800 shadow-2xl mb-8 sticky top-4 z-[100] overflow-hidden backdrop-blur-xl">
         <div className="bg-card-header px-8 py-5 flex justify-between items-center">
            <div className="flex items-center gap-4">
               <div className={`w-4 h-4 rounded-full ${signal.status === SystemStatus.AUTHORIZED ? 'bg-emerald-500 animate-pulse shadow-[0_0_15px_#10b981]' : signal.status === SystemStatus.OBSERVATION ? 'bg-amber-500' : 'bg-rose-500'}`} />
               <div className="flex flex-col">
                  <span className={`text-[12px] font-black uppercase tracking-widest ${signal.status === SystemStatus.AUTHORIZED ? 'text-neon-green' : signal.status === SystemStatus.OBSERVATION ? 'text-neon-amber' : 'text-neon-red'}`}>{signal.status}</span>
-                 <span className="text-[9px] font-bold text-slate-600 uppercase">Motor Sniper v3.1</span>
+                 <span className="text-[9px] font-bold text-slate-600 uppercase">Engine Sniper 3.2 Premium</span>
               </div>
            </div>
            <div className="flex gap-12">
-              <HeaderMetric label="Alvo Atual" value={signal.targetColumn ? `COLUNA ${signal.targetColumn}` : '--'} color="text-emerald-400" />
               <HeaderMetric label="Banca Real" value={`R$ ${stats.currentBank.toFixed(2)}`} color="text-white" />
-              <HeaderMetric label="Lucro / Preju" value={`R$ ${stats.profit.toFixed(2)}`} color={stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
+              <HeaderMetric label="Resultado" value={`R$ ${stats.profit.toFixed(2)}`} color={stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
+              <HeaderMetric label="Taxa Acerto" value={`${winRate.toFixed(1)}%`} color="text-sky-400" />
            </div>
         </div>
         <div className="px-8 py-4 bg-black/40 flex items-center justify-between border-t border-slate-800/50">
            <div className="flex items-center gap-5">
-              <span className="text-[10px] font-black text-slate-500 uppercase">Progressão Sniper</span>
+              <span className="text-[10px] font-black text-slate-500 uppercase">Progressão Ciclo</span>
               <div className="flex gap-2">
                  {[1, 2, 3, 4, 5].map(step => (
                    <div key={step} className={`h-2 w-10 rounded-full transition-all duration-500 ${signal.progressionStep >= step ? 'bg-emerald-500 shadow-[0_0_8px_#10b981]' : 'bg-slate-800'}`} />
@@ -358,8 +362,8 @@ const App: React.FC = () => {
               </div>
            </div>
            <div className="flex items-center gap-5">
-              <span className="text-[10px] font-black text-slate-500 uppercase">Assertividade</span>
-              <span className="text-emerald-500 font-black text-lg">{winRate.toFixed(1)}%</span>
+              <span className="text-[10px] font-black text-slate-500 uppercase">Aposta Atual</span>
+              <span className="text-emerald-500 font-black text-lg">R$ {signal.progressionStep > 0 ? progressionLevels[signal.progressionStep - 1].toFixed(2) : '0,00'}</span>
            </div>
         </div>
       </div>
@@ -374,20 +378,28 @@ const App: React.FC = () => {
               
               <div className="space-y-6">
                  <div>
-                    <p className="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest">Filtros Sniper</p>
-                    <ValidationItem label="Dominância Estável" active={!!analysis?.triggers.C1_Dominance} mandatory />
-                    <ValidationItem label="Volume de Entrada" active={!!analysis?.triggers.G_Pressure} mandatory />
-                    <ValidationItem label="Coluna Ativa" active={!!analysis?.triggers.G_Momentum} mandatory />
-                    <ValidationItem label="Sem Saturação" active={!analysis?.blocks.saturationBloq} mandatory />
-                    <ValidationItem label="Sem Bloqueios" active={!!analysis?.blocks.noBlocks} mandatory />
+                    <p className="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest">Filtros Operacionais</p>
+                    <ValidationItem label="Dominância Sniper" active={!!analysis?.triggers.dominanceOK} mandatory />
+                    <ValidationItem label="Pressão Imediata" active={!!analysis?.triggers.pressureOK} mandatory />
+                    <ValidationItem label="Coluna Quente" active={!!analysis?.triggers.momentumActive} mandatory />
+                    <ValidationItem label="Caminho Limpo" active={!!analysis?.blocks.noBlocks} mandatory />
                  </div>
                  
                  <div className="pt-6 border-t border-slate-800/50">
                     <p className="text-[10px] font-black text-slate-500 mb-4 tracking-widest flex justify-between uppercase">
-                       <span>Indicadores</span>
+                       <span>Tendência de Fluxo</span>
                     </p>
-                    <ValidationItem label="Tendência Alta" active={!!analysis?.triggers.trendUp} />
-                    <ValidationItem label="Volume Sniper" active={!!analysis?.triggers.highVolume} />
+                    <div className="flex justify-between items-center mb-4">
+                       <span className="text-[11px] font-bold text-slate-400 uppercase">Status do Canal:</span>
+                       <span className={`text-[11px] font-black flex items-center gap-1 ${analysis?.trend === 'Subindo' ? 'text-emerald-500' : 'text-slate-500'}`}>
+                          {/* Changed Activity to HealthIcon as it was aliased in imports */}
+                          {analysis?.trend === 'Subindo' ? <TrendingUp size={14}/> : <HealthIcon size={14}/>} {analysis?.trend}
+                       </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                       <span className="text-[11px] font-bold text-slate-400 uppercase">Saúde do Padrão:</span>
+                       <span className="text-[11px] font-black text-emerald-400">{analysis?.patternStrength.toFixed(0)}%</span>
+                    </div>
                  </div>
               </div>
            </section>
@@ -397,13 +409,13 @@ const App: React.FC = () => {
                 <div className="flex items-center justify-between mb-4">
                    <div className="flex items-center gap-3 text-amber-500">
                       <AlertTriangle size={24} />
-                      <h3 className="text-base font-black uppercase">Ciclo Ativo</h3>
+                      <h3 className="text-base font-black uppercase">Modo Gale Ativado</h3>
                    </div>
-                   <div className="bg-amber-500/20 text-amber-500 px-3 py-1 rounded-xl text-xs font-black">PASSO {signal.progressionStep}</div>
+                   <div className="bg-amber-500/20 text-amber-500 px-3 py-1 rounded-xl text-xs font-black">G{signal.progressionStep}</div>
                 </div>
                 <p className="text-slate-400 text-xs font-bold leading-relaxed">
-                   Aguardando confirmação para o <span className="text-white">Passo {signal.progressionStep}</span>. 
-                   <span className="block mt-2 text-white/80 italic">O sistema travou o alvo na Coluna {signal.targetColumn} para garantir o acerto original.</span>
+                   Aguardando re-confirmação para o <span className="text-white">G{signal.progressionStep}</span> na Coluna {signal.targetColumn}. 
+                   <span className="block mt-2 text-white/80 italic">Protegemos seu capital: se a coluna alvo "esfriar" demais, o sistema cancelará este ciclo automaticamente.</span>
                 </p>
              </div>
            )}
@@ -416,20 +428,20 @@ const App: React.FC = () => {
                    <button key={n} onClick={() => addNumber(n)} className={`h-11 text-[12px] font-black rounded-xl border transition-all active:scale-90 ${n === 0 ? 'bg-emerald-600 border-emerald-400 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'}`}>{n}</button>
                  ))}
               </div>
-              <textarea className="w-full bg-black border border-slate-800 rounded-2xl p-6 text-[13px] font-mono text-white focus:border-emerald-500 outline-none h-40 mb-6 custom-scroll" placeholder="Cole os números aqui..." value={inputValue} onChange={e => setInputValue(e.target.value)} />
+              <textarea className="w-full bg-black border border-slate-800 rounded-2xl p-6 text-[13px] font-mono text-white focus:border-emerald-500 outline-none h-40 mb-6 custom-scroll" placeholder="Ex: 21, 9, 10, 19..." value={inputValue} onChange={e => setInputValue(e.target.value)} />
               <div className="flex gap-4">
-                 <button onClick={pasteNumbers} className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-black py-5 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95">Análise em Lote</button>
+                 <button onClick={pasteNumbers} className="flex-1 bg-emerald-500 hover:bg-emerald-400 text-black py-5 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95">Análise em Massa</button>
                  <button onClick={() => setHistory(prev => prev.slice(1))} className="w-20 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-center text-slate-500 hover:text-rose-500 transition-all"><Trash2 size={22}/></button>
               </div>
            </section>
 
            <section className="bg-card rounded-[28px] p-8 border border-slate-800 shadow-xl">
-              <h3 className="text-[11px] font-black text-slate-400 uppercase mb-8 flex items-center gap-3 tracking-widest"><BarChart3 size={18} className="text-emerald-500" /> Painel Financeiro</h3>
+              <h3 className="text-[11px] font-black text-slate-400 uppercase mb-8 flex items-center gap-3 tracking-widest"><BarChart3 size={18} className="text-emerald-500" /> Estatísticas da Sessão</h3>
               <div className="grid grid-cols-2 gap-5">
-                 <MetricBox label="Lucro Líquido" value={`R$ ${stats.profit.toFixed(2)}`} color={stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
-                 <MetricBox label="Assertividade" value={`${winRate.toFixed(1)}%`} />
-                 <MetricBox label="Vitórias" value={stats.wins} color="text-emerald-400" />
-                 <MetricBox label="Derrotas" value={stats.losses} color="text-rose-400" />
+                 <MetricBox label="Lucro Atual" value={`R$ ${stats.profit.toFixed(2)}`} color={stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
+                 <MetricBox label="Banca Total" value={`R$ ${stats.currentBank.toFixed(2)}`} />
+                 <MetricBox label="Ciclos Green" value={stats.wins} color="text-emerald-400" />
+                 <MetricBox label="Ciclos Red" value={stats.losses} color="text-rose-400" />
               </div>
            </section>
         </div>
@@ -437,7 +449,7 @@ const App: React.FC = () => {
         <div className="lg:col-span-3">
            <section className="bg-card rounded-[28px] p-8 border border-slate-800 h-full flex flex-col shadow-xl">
               <div className="flex items-center justify-between mb-8">
-                 <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3"><HistoryIcon size={18} className="text-emerald-500" /> Histórico</h3>
+                 <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3"><HistoryIcon size={18} className="text-emerald-500" /> Base de Dados</h3>
                  <button onClick={copyHistory} className="text-slate-500 hover:text-emerald-400 transition-all flex items-center gap-2">
                     {copied ? <Check size={16} className="text-emerald-500" /> : <Copy size={16} />}
                     <span className="text-[10px] font-black uppercase">{copied ? 'Copiado' : 'Exportar'}</span>
@@ -464,12 +476,12 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[500] bg-black/98 backdrop-blur-3xl flex items-center justify-center p-8 animate-in zoom-in-95 duration-300">
            <div className={`bg-card border-2 border-emerald-500 rounded-[56px] p-12 max-w-xl w-full text-center relative overflow-hidden shadow-[0_0_100px_rgba(16,185,129,0.1)]`}>
               <div className="w-24 h-24 bg-emerald-500/10 rounded-[32px] flex items-center justify-center mx-auto mb-8 mt-6 border border-emerald-500/20 shadow-inner">
-                 <ShieldCheck size={48} className="text-emerald-500" />
+                 <Target size={48} className="text-emerald-500" />
               </div>
               <h2 className="text-3xl font-black text-white uppercase mb-2 tracking-tighter">Entrada Autorizada</h2>
               <div className="max-w-[300px] mx-auto mb-10">
                  <div className="flex justify-between items-center mb-2.5">
-                    <span className="text-[9px] font-black text-slate-500 uppercase">Saúde do Padrão</span>
+                    <span className="text-[9px] font-black text-slate-500 uppercase">Força Sniper</span>
                     <span className="text-[11px] font-black text-emerald-400">{signal.signalHealth}%</span>
                  </div>
                  <div className="h-2 w-full bg-slate-900 rounded-full overflow-hidden border border-slate-800">
@@ -477,31 +489,31 @@ const App: React.FC = () => {
                  </div>
               </div>
               <div className="bg-black/50 border border-slate-800 rounded-[40px] p-12 mb-10">
-                 <p className="text-[12px] font-black text-emerald-500 uppercase mb-4 tracking-widest opacity-80">Apostar na Coluna</p>
+                 <p className="text-[12px] font-black text-emerald-500 uppercase mb-4 tracking-widest opacity-80">Jogar na Coluna</p>
                  <h1 className="text-[180px] font-black text-white leading-none tracking-tighter">{signal.targetColumn}</h1>
               </div>
               <div className="grid grid-cols-2 gap-5 mb-10 text-left">
                  <div className="bg-slate-900/50 p-6 rounded-3xl border border-slate-800">
-                    <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Aposta (G{signal.progressionStep})</p>
+                    <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Valor (G{signal.progressionStep})</p>
                     <p className="text-2xl font-black text-white">R$ {progressionLevels[signal.progressionStep - 1].toFixed(2)}</p>
                  </div>
                  <div className="bg-slate-900/50 p-6 rounded-3xl border border-slate-800">
-                    <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Alvo Sniper</p>
-                    <p className="text-2xl font-black text-emerald-500 uppercase">COLUNA {signal.targetColumn}</p>
+                    <p className="text-[10px] font-black text-slate-500 uppercase mb-2">Total no Ciclo</p>
+                    <p className="text-2xl font-black text-rose-400">R$ {(signal.investedInCycle + progressionLevels[signal.progressionStep - 1]).toFixed(2)}</p>
                  </div>
               </div>
-              <button onClick={confirmBet} className="w-full py-6 bg-emerald-500 hover:bg-emerald-400 text-black rounded-[24px] font-black text-lg uppercase transition-all shadow-2xl active:scale-95 shadow-emerald-500/20">Confirmar Entrada</button>
+              <button onClick={confirmBet} className="w-full py-6 bg-emerald-500 hover:bg-emerald-400 text-black rounded-[24px] font-black text-lg uppercase transition-all shadow-2xl active:scale-95 shadow-emerald-500/20">Confirmar Sniper</button>
            </div>
         </div>
       )}
 
       {/* FOOTER */}
       <div className="w-full mt-12 grid grid-cols-1 md:grid-cols-4 gap-5">
-         <FooterCard icon={<TrendingUp size={20} className="text-emerald-500" />} label="Radar de Tendência" value={analysis?.trend || "PRONTO"} />
-         <FooterCard icon={<ShieldCheck size={20} className="text-sky-500" />} label="Bloqueio Zero" value={analysis?.blocks.zeroBloq ? "ATIVO" : "LIMPO"} />
-         <FooterCard icon={<HealthIcon size={20} className="text-emerald-400" />} label="Assertividade" value={analysis ? `${analysis.patternStrength.toFixed(0)}%` : "--"} />
+         <FooterCard icon={<TrendingUp size={20} className="text-emerald-500" />} label="Radar de Fluxo" value={analysis?.trend || "ESTÁVEL"} />
+         <FooterCard icon={<ShieldCheck size={20} className="text-sky-500" />} label="Filtro Anti-Oscilação" value={analysis?.blocks.noBlocks ? "LIMPO" : "ATIVO"} />
+         <FooterCard icon={<HealthIcon size={20} className="text-emerald-400" />} label="Confiança" value={analysis ? `${analysis.patternStrength.toFixed(0)}%` : "--"} />
          <button onClick={handleResetSession} className="bg-slate-900/40 hover:bg-rose-500/10 border border-slate-800 text-slate-600 hover:text-rose-500 p-6 rounded-[24px] transition-all flex items-center justify-center gap-4 font-black text-[11px] uppercase tracking-widest">
-            <RotateCcw size={18} /> Zerar Analisador
+            <RotateCcw size={18} /> Zerar Sistema
          </button>
       </div>
     </div>
