@@ -156,16 +156,13 @@ const App: React.FC = () => {
   const analysis = useMemo(() => {
     if (history.length < 10) return null;
 
+    // Detecta a melhor coluna em tempo real, sem travar na anterior
     let target = 1;
-    if (signal.isAwaitingResult && signal.targetColumn) {
-      target = signal.targetColumn;
-    } else {
-      const p1 = getColPercentage(1, 20);
-      const p2 = getColPercentage(2, 20);
-      const p3 = getColPercentage(3, 20);
-      if (p2 > p1 && p2 > p3) target = 2;
-      if (p3 > p1 && p3 > p2) target = 3;
-    }
+    const p1 = getColPercentage(1, 20);
+    const p2 = getColPercentage(2, 20);
+    const p3 = getColPercentage(3, 20);
+    if (p2 > p1 && p2 > p3) target = 2;
+    if (p3 > p1 && p3 > p2) target = 3;
 
     const window3 = history.slice(0, 3);
     const window4 = history.slice(0, 4);
@@ -173,14 +170,14 @@ const App: React.FC = () => {
     const window7 = history.slice(0, 7);
 
     // GATILHOS CONFORME TABELA
-    const C1_Dominance = getColPercentage(target, 20) >= 35; // Muito Alto / Obrigatório
-    const G_Pressure = window7.filter(s => s.column === target).length >= 4; // Muito Alto / Obrigatório
+    const C1_Dominance = getColPercentage(target, 20) >= 35; 
+    const G_Pressure = window7.filter(s => s.column === target).length >= 4; 
     
-    const G_Continuity = window4.filter(s => s.column === target).length >= 2; // Alto / Opcional
-    const G_Momentum = window3.filter(s => s.column === target).length >= 2; // Alto / Opcional
-    const G_Streak = history[0].column === target && history[1].column === target; // Moderado / Opcional
-    const G_HotZone = getColPercentage(target, 10) >= 40; // Moderado / Opcional
-    const G_Eco = window5.filter(s => s.column === target).length >= 2; // Moderado / Opcional
+    const G_Continuity = window4.filter(s => s.column === target).length >= 2; 
+    const G_Momentum = window3.filter(s => s.column === target).length >= 2; 
+    const G_Streak = history[0].column === target && history[1].column === target; 
+    const G_HotZone = getColPercentage(target, 10) >= 40; 
+    const G_Eco = window5.filter(s => s.column === target).length >= 2; 
 
     // BLOQUEIOS
     const otherColStreak = [1, 2, 3].filter(c => c !== target).some(c => window3.every(s => s.column === c));
@@ -195,17 +192,18 @@ const App: React.FC = () => {
 
     // CHECKLIST STATUS
     const spinsSinceLastSignal = history.length - signal.lastSignalSpinCount;
-    const cooldownOK = signal.lastSignalSpinCount === 0 || spinsSinceLastSignal >= 20;
+    // Se estiver em pausa, o cooldown de 20 spins não se aplica (pois é continuação do mesmo ciclo)
+    const cooldownOK = signal.isPaused || signal.isAwaitingResult || signal.lastSignalSpinCount === 0 || spinsSinceLastSignal >= 20;
     
     const noBlocks = !otherColStreak && !zeroBloq && !absenceBloq;
     
-    // REGRA DE OURO: Obrigatórios OK + Pelo menos 1 Opcional
+    // REGRA DE OURO
     const mandatoryOK = C1_Dominance && G_Pressure && noBlocks && cooldownOK;
     const optionalOK = G_Continuity || G_Momentum || G_Streak || G_HotZone || G_Eco;
 
     const isValid = mandatoryOK && optionalOK;
 
-    // UI Feedback
+    // Feedback Visual
     const perc10 = getColPercentage(target, 10);
     const perc20 = getColPercentage(target, 20);
     const trend = perc10 > perc20 ? 'Subindo' : perc10 < perc20 ? 'Descendo' : 'Estável';
@@ -219,17 +217,19 @@ const App: React.FC = () => {
       blocks: { otherColStreak, zeroBloq, absenceBloq, cooldownOK, noBlocks },
       spinsToNext: Math.max(0, 20 - spinsSinceLastSignal)
     };
-  }, [history, signal.lastSignalSpinCount, signal.isAwaitingResult, signal.targetColumn]);
+  }, [history, signal.lastSignalSpinCount, signal.isPaused, signal.isAwaitingResult]);
 
   useEffect(() => {
     if (!isSessionStarted || history.length === 0) return;
     const latest = history[0];
     const spinCount = history.length;
 
+    // 1. Processa o resultado do giro anterior
     if (signal.isAwaitingResult && !signal.showOverlay && !signal.isPaused && spinCount !== lastProcessedSpinCount.current) {
       lastProcessedSpinCount.current = spinCount;
       
       if (latest.column === signal.targetColumn) {
+        // WIN -> Reseta ciclo
         const betValue = progressionLevels[signal.progressionStep - 1];
         const winValue = betValue * 3;
         const profit = winValue - signal.investedInCycle;
@@ -243,10 +243,12 @@ const App: React.FC = () => {
         audioService.playWin();
         setTimeout(() => setShowResult(null), 3000);
       } else {
+        // LOSS -> Pausa ciclo para aguardar nova análise (pode ser outra coluna)
         if (signal.progressionStep < 5) {
           setSignal(prev => ({ ...prev, progressionStep: prev.progressionStep + 1, isPaused: true }));
           audioService.playObservation();
         } else {
+          // RED FINAL
           setStats(prev => ({ ...prev, losses: prev.losses + 1, totalEntries: prev.totalEntries + 1, dailyPercentage: ((prev.currentBank - initialBank) / initialBank) * 100 }));
           setSignal(prev => ({ ...prev, isAwaitingResult: false, progressionStep: 0, investedInCycle: 0, targetColumn: null, lastSignalSpinCount: history.length, isPaused: false }));
           setShowResult({ type: 'LOSS', value: signal.investedInCycle });
@@ -257,24 +259,34 @@ const App: React.FC = () => {
       return;
     }
 
+    // 2. Retomada de Ciclo Pausado (Adaptação de Coluna)
+    // Se o ciclo está em pausa e QUALQUER coluna (detectada no analysis.target) satisfizer a checklist, retoma.
     if (signal.isPaused && analysis?.isValid) {
-      setSignal(prev => ({ ...prev, isPaused: false, showOverlay: true, status: SystemStatus.AUTHORIZED }));
+      setSignal(prev => ({ 
+        ...prev, 
+        isPaused: false, 
+        showOverlay: true, 
+        status: SystemStatus.AUTHORIZED,
+        targetColumn: analysis.target, // Atualiza para a nova coluna detectada
+        signalHealth: Math.round(analysis.patternStrength)
+      }));
     }
 
-    if (!signal.isAwaitingResult && analysis?.isValid) {
+    // 3. Emissão de Novo Sinal (Início de Ciclo)
+    if (!signal.isAwaitingResult && !signal.isPaused && analysis?.isValid) {
       setSignal(prev => ({
         ...prev, status: SystemStatus.AUTHORIZED, targetColumn: analysis.target,
         progressionStep: 1, isAwaitingResult: true, showOverlay: true,
         signalHealth: Math.round(analysis.patternStrength), isPaused: false
       }));
       audioService.playObservation();
-    } else if (!signal.isAwaitingResult) {
+    } else if (!signal.isAwaitingResult && !signal.isPaused) {
       const hasBlock = analysis?.blocks.zeroBloq || analysis?.blocks.otherColStreak || analysis?.blocks.absenceBloq || !analysis?.blocks.cooldownOK;
       setSignal(prev => ({ 
         ...prev, status: hasBlock ? SystemStatus.OBSERVATION : SystemStatus.NO_SIGNAL 
       }));
     }
-  }, [history.length, isSessionStarted, analysis, signal.isAwaitingResult, signal.progressionStep, signal.targetColumn, progressionLevels, initialBank]);
+  }, [history.length, isSessionStarted, analysis, signal.isAwaitingResult, signal.isPaused, signal.progressionStep, signal.targetColumn, progressionLevels, initialBank]);
 
   const confirmBet = () => {
     const betValue = progressionLevels[signal.progressionStep - 1];
@@ -343,7 +355,7 @@ const App: React.FC = () => {
               </div>
            </div>
            <div className="flex gap-12">
-              <HeaderMetric label="Alvo Atual" value={signal.targetColumn ? `COLUNA ${signal.targetColumn}` : '--'} color="text-emerald-400" />
+              <HeaderMetric label="Alvo Ativo" value={signal.targetColumn ? `COLUNA ${signal.targetColumn}` : '--'} color="text-emerald-400" />
               <HeaderMetric label="Banca Real" value={`R$ ${stats.currentBank.toFixed(2)}`} color="text-white" />
               <HeaderMetric label="Lucro / Preju" value={`R$ ${stats.profit.toFixed(2)}`} color={stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
            </div>
@@ -366,7 +378,6 @@ const App: React.FC = () => {
       </div>
 
       <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
-        {/* CHECKLIST E GATILHOS */}
         <div className="lg:col-span-4 space-y-8">
            <section className="bg-card rounded-[28px] p-8 border border-slate-800 shadow-xl">
               <div className="flex justify-between items-center mb-6">
@@ -410,7 +421,6 @@ const App: React.FC = () => {
               </div>
            </section>
 
-           {/* PAUSA DE CICLO (UI) */}
            {signal.isPaused && (
              <div className="bg-amber-500/10 border-2 border-amber-500/50 rounded-[28px] p-6 animate-in fade-in zoom-in duration-300">
                 <div className="flex items-center justify-between mb-4">
@@ -420,12 +430,14 @@ const App: React.FC = () => {
                    </div>
                    <div className="bg-amber-500/20 text-amber-500 px-3 py-1 rounded-xl text-xs font-black">{signal.progressionStep}u/5u</div>
                 </div>
-                <p className="text-slate-400 text-xs font-bold leading-relaxed">Aguarde próximo sinal para continuar progressão na Coluna {signal.targetColumn}.</p>
+                <p className="text-slate-400 text-xs font-bold leading-relaxed">
+                   Aguardando nova análise para continuar progressão G{signal.progressionStep}. 
+                   <span className="block mt-2 text-white/80 italic">O sistema irá captar o próximo sinal em qualquer coluna disponível.</span>
+                </p>
              </div>
            )}
         </div>
 
-        {/* INPUT E ANÁLISE */}
         <div className="lg:col-span-5 space-y-8">
            <section className="bg-card rounded-[28px] p-8 border border-slate-800 shadow-xl">
               <div className="grid grid-cols-6 gap-1.5 mb-8">
@@ -453,7 +465,6 @@ const App: React.FC = () => {
            </section>
         </div>
 
-        {/* HISTÓRICO */}
         <div className="lg:col-span-3">
            <section className="bg-card rounded-[28px] p-8 border border-slate-800 h-full flex flex-col shadow-xl">
               <div className="flex items-center justify-between mb-8">
@@ -464,7 +475,7 @@ const App: React.FC = () => {
                  {history.map((spin, i) => (
                    <div key={i} className="flex items-center justify-between p-4 bg-black/40 border border-slate-900 rounded-2xl hover:border-slate-800 transition-all">
                       <div className="flex items-center gap-4">
-                        <span className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm border-2 ${spin.number === 0 ? 'bg-emerald-600 border-emerald-400/50 text-white' : [1,3,5,7,9,12,14,16,18,19,21,22,25,27,30,33,34,36].includes(spin.number) ? 'bg-rose-600 border-rose-400/50 text-white' : 'bg-slate-900 border-slate-800 text-white'}`}>{spin.number}</span>
+                        <span className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm border-2 ${spin.number === 0 ? 'bg-emerald-600 border-emerald-400/50 text-white' : [1,4,7,10,13,16,19,22,25,28,31,34].includes(spin.number) ? 'bg-rose-600 border-rose-400/50 text-white' : 'bg-slate-900 border-slate-800 text-white'}`}>{spin.number}</span>
                         <div className="flex flex-col">
                            <span className="text-[11px] font-black text-slate-300 uppercase tracking-tight">COLUNA {spin.column || 'ZERO'}</span>
                            <span className="text-[9px] font-bold text-slate-600">{spin.timestamp}</span>
@@ -478,7 +489,6 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      {/* OVERLAY DE SINAL */}
       {signal.showOverlay && (
         <div className="fixed inset-0 z-[500] bg-black/98 backdrop-blur-3xl flex items-center justify-center p-8 animate-in zoom-in-95 duration-300">
            <div className={`bg-card border-2 border-emerald-500 rounded-[56px] p-12 max-w-xl w-full text-center relative overflow-hidden shadow-[0_0_100px_rgba(16,185,129,0.1)]`}>
