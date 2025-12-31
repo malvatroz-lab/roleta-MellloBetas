@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { GoogleGenAI } from "@google/genai";
 import { 
@@ -55,6 +54,7 @@ interface SimulationResult {
     wins: number;
     losses: number;
     totalEntries: number;
+    winRate: number; // Added WinRate to interface
     status: 'EXCELLENT' | 'GOOD' | 'BAD' | 'CRITICAL';
 }
 
@@ -65,6 +65,61 @@ interface NotificationState {
     message: string;
     type: 'error' | 'success' | 'info';
 }
+
+const HeaderMetric = ({ label, value, color = "text-white" }: { label: string; value: string; color?: string }) => (
+  <div className="flex flex-col">
+    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{label}</span>
+    <span className={`text-xl font-black ${color} tracking-tight`}>{value}</span>
+  </div>
+);
+
+const ScoreItem = ({ 
+  label, 
+  value, 
+  active, 
+  score, 
+  icon 
+}: { 
+  label: string; 
+  value: string; 
+  active: boolean; 
+  score: number; 
+  icon: React.ReactNode 
+}) => (
+  <div className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${active ? 'bg-purple-500/5 border-purple-500/20 shadow-[0_0_20px_rgba(168,85,247,0.05)]' : 'bg-black/20 border-slate-800/50'}`}>
+      <div className="flex items-center gap-4">
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all ${active ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/20' : 'bg-slate-900 text-slate-600'}`}>
+              {icon}
+          </div>
+          <div className="flex flex-col">
+              <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">{label}</span>
+              <span className={`text-xs font-black uppercase ${active ? 'text-white' : 'text-slate-600'}`}>{value}</span>
+          </div>
+      </div>
+      <div className={`px-3 py-1.5 rounded-lg text-[10px] font-black transition-all ${active ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20' : 'bg-slate-900 text-slate-700 border border-slate-800'}`}>
+          +{score}
+      </div>
+  </div>
+);
+
+const MetricBox = ({ label, value, color }: { label: string; value: string; color?: string }) => (
+  <div className="bg-black/40 rounded-2xl p-5 border border-slate-800 hover:border-slate-700 transition-all">
+      <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-1">{label}</p>
+      <p className={`text-xl font-black ${color || 'text-white'}`}>{value}</p>
+  </div>
+);
+
+const FooterCard = ({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) => (
+  <div className="bg-card border border-slate-800 p-6 rounded-[24px] shadow-xl flex items-center gap-5 hover:border-slate-700 transition-all">
+      <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center">
+          {icon}
+      </div>
+      <div>
+          <p className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-0.5">{label}</p>
+          <p className="text-sm font-black text-white uppercase">{value}</p>
+      </div>
+  </div>
+);
 
 const App: React.FC = () => {
   const [isSessionStarted, setIsSessionStarted] = useState(false);
@@ -184,19 +239,19 @@ const App: React.FC = () => {
     showNotification(`${numbers.length} números injetados.`, "success");
   }, [inputValue, history]);
 
-  // Função pura de simulação (Core Logic)
+  // Função pura de simulação (Core Logic) - Refatorada para Fluxo de Caixa
   const executeSimulation = useCallback((chronoNumbers: number[]): SimulationResult => {
-      let simProfit = 0;
+      let simBalance = 0; // Starts at 0, tracks P&L directly
       let simWins = 0;
       let simLosses = 0;
       let simTotalEntries = 0;
       
       let currentTier = 0;
       let currentTargetCol: number | null = null;
-      let currentInvested = 0;
-
+      
       const simHistory: SpinResult[] = [];
 
+      // Inicializa histórico mínimo
       for(let i=0; i<5; i++) {
           if(i < chronoNumbers.length) {
               simHistory.unshift({
@@ -207,36 +262,50 @@ const App: React.FC = () => {
           }
       }
 
+      // Loop principal (simula rodada a rodada)
       for (let i = 5; i < chronoNumbers.length; i++) {
           const num = chronoNumbers[i];
           const col = getColumn(num);
 
           if (currentTargetCol !== null) {
+              // Estamos em operação
               const betAmount = progressionLevels[currentTier];
-              currentInvested += betAmount;
+              
+              // 1. Paga a aposta (sai do caixa)
+              simBalance -= betAmount;
 
               if (col === currentTargetCol) {
-                  const winAmount = betAmount * 3;
-                  simProfit += (winAmount - currentInvested);
+                  // WIN
+                  const winReturn = betAmount * 3;
+                  simBalance += winReturn; // Entra o prêmio
+                  
                   simWins++;
                   simTotalEntries++;
+                  
+                  // Reset ciclo
                   currentTargetCol = null;
                   currentTier = 0;
-                  currentInvested = 0;
               } else {
+                  // NÃO GANHOU NESTA RODADA
                   if (currentTier < 4) {
+                      // Se ainda não estamos no último nível (G5 é index 4), progride
                       currentTier++;
                   } else {
-                      simProfit -= currentInvested;
+                      // LOSS (Perdeu no G5/Tier 4)
+                      // O dinheiro já saiu do caixa no 'simBalance -= betAmount' acima.
+                      // Apenas registramos a derrota e resetamos.
                       simLosses++;
                       simTotalEntries++;
+                      
+                      // Reset ciclo
                       currentTargetCol = null;
                       currentTier = 0;
-                      currentInvested = 0;
                   }
               }
           } 
           
+          // Se não estamos em operação (ou acabamos de sair de uma), procura nova entrada
+          // Importante: verifica novamente se é null, pois pode ter sido resetado acima (vitória ou derrota)
           if (currentTargetCol === null) {
               const analysis = analyzeSnapshot(simHistory);
               if (analysis.isValid && analysis.target) {
@@ -245,6 +314,7 @@ const App: React.FC = () => {
               }
           }
 
+          // Atualiza histórico para a próxima iteração
           simHistory.unshift({
               number: num,
               column: col,
@@ -252,16 +322,34 @@ const App: React.FC = () => {
           });
       }
 
+      // Cálculo da Assertividade
+      const winRate = simTotalEntries > 0 ? (simWins / simTotalEntries) * 100 : 0;
+
+      // Avaliação de Status Ajustada (Priorizando Assertividade)
       let status: SimulationResult['status'] = 'BAD';
-      if (simProfit > 0 && simLosses === 0) status = 'EXCELLENT';
-      else if (simProfit > 0) status = 'GOOD';
-      else if (simProfit < -20) status = 'CRITICAL';
+      
+      if (simBalance > 0) {
+          if (simLosses === 0) status = 'EXCELLENT'; // Lucro e invicto
+          else status = 'GOOD'; // Lucro com alguns sustos
+      } else {
+          // Prejuízo ou zero a zero
+          if (winRate >= 75) {
+             // Mesmo negativo, se acertou 75% das vezes, a mesa está respeitando o padrão.
+             // O prejuízo se deve apenas à agressividade do gale em uma bad run específica.
+             status = 'GOOD';
+          } else if (winRate >= 40 && simBalance > -20) {
+             status = 'BAD';
+          } else {
+             status = 'CRITICAL';
+          }
+      }
 
       return {
-          profit: simProfit,
+          profit: simBalance,
           wins: simWins,
           losses: simLosses,
           totalEntries: simTotalEntries,
+          winRate,
           status
       };
   }, [progressionLevels]);
@@ -691,9 +779,12 @@ const App: React.FC = () => {
                         R$ {simResult.profit.toFixed(2)}
                     </p>
                  </div>
-                 <div className="bg-black/40 rounded-xl p-4 border border-slate-800">
+                 <div className="bg-black/40 rounded-xl p-4 border border-slate-800 relative">
                      <p className="text-[10px] font-black text-slate-500 uppercase">Greens / Reds</p>
                      <p className="text-xl font-black text-white">{simResult.wins} <span className="text-slate-600 text-sm">/</span> <span className="text-rose-500">{simResult.losses}</span></p>
+                     <div className="absolute top-4 right-4 bg-purple-500/10 px-2 py-0.5 rounded text-[10px] font-black text-purple-400 border border-purple-500/20">
+                         {simResult.winRate.toFixed(0)}% WIN
+                     </div>
                  </div>
               </div>
               <button onClick={() => setSimResult(null)} className="w-full py-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-black uppercase text-sm transition-all">Fechar Diagnóstico</button>
@@ -956,53 +1047,5 @@ const App: React.FC = () => {
     </div>
   );
 };
-// ... (Component exports remain the same)
-const HeaderMetric: React.FC<{ label: string; value: string | number; color?: string }> = ({ label, value, color = 'text-slate-400' }) => (
-  <div className="flex flex-col items-end">
-    <p className="text-[9px] font-black text-slate-600 uppercase tracking-[0.1em] mb-1">{label}</p>
-    <span className={`text-sm font-black truncate ${color}`}>{value}</span>
-  </div>
-);
-
-const ActivityIndicator: React.FC<{ status: 'EXCELLENT' | 'GOOD' | 'BAD' | 'CRITICAL' }> = ({ status }) => {
-    if (status === 'EXCELLENT' || status === 'GOOD') {
-        return <CheckCircle2 size={16} className={status === 'EXCELLENT' ? 'text-emerald-400' : 'text-teal-400'} />;
-    }
-    return <AlertTriangle size={16} className="text-rose-400" />;
-}
-
-const MetricBox: React.FC<{ label: string; value: string | number; color?: string }> = ({ label, value, color = 'text-white' }) => (
-  <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/50 shadow-sm">
-     <p className="text-[10px] font-black text-slate-500 uppercase mb-2 tracking-widest">{label}</p>
-     <p className={`text-base font-black truncate ${color}`}>{value}</p>
-  </div>
-);
-
-const FooterCard: React.FC<{ icon: React.ReactNode; label: string; value: string | number }> = ({ icon, label, value }) => (
-  <div className="bg-card border border-slate-800 p-6 rounded-[24px] flex items-center gap-5 shadow-xl hover:border-slate-700 transition-all">
-     <div className="w-14 h-14 rounded-2xl bg-black flex items-center justify-center border border-slate-800">{icon}</div>
-     <div>
-        <p className="text-[10px] font-black text-slate-600 uppercase tracking-widest mb-1">{label}</p>
-        <p className="text-xs font-black text-white">{value}</p>
-     </div>
-  </div>
-);
-
-const ScoreItem: React.FC<{ label: string; value: string; active: boolean; score: number; icon: React.ReactNode }> = ({ label, value, active, score, icon }) => (
-  <div className={`flex items-center justify-between py-2 transition-all ${active ? 'text-white' : 'text-slate-700 opacity-40'}`}>
-     <div className="flex items-center gap-3">
-        <div className={`w-8 h-8 rounded-lg border flex items-center justify-center transition-all ${active ? 'bg-purple-500/20 border-purple-500/50 text-purple-400' : 'border-slate-800 bg-black/40'}`}>
-           {icon}
-        </div>
-        <div className="flex flex-col">
-            <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider">{label}</span>
-            <span className={`text-[11px] font-bold uppercase tracking-tight ${active ? 'opacity-100' : 'opacity-40'}`}>{value}</span>
-        </div>
-     </div>
-     <div className={`px-2 py-1 rounded text-[10px] font-black ${active ? 'bg-purple-500 text-white' : 'bg-slate-900 text-slate-700'}`}>
-         +{score} pts
-     </div>
-  </div>
-);
 
 export default App;
