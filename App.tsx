@@ -35,9 +35,12 @@ import {
   Loader2,
   FlaskConical,
   AlertTriangle,
-  Siren
+  Siren,
+  Power,
+  Info
 } from 'lucide-react';
 
+// ... (Interfaces remain the same)
 interface ExtendedSignalState extends SignalState {
   showOverlay: boolean;
   investedInCycle: number;
@@ -56,6 +59,12 @@ interface SimulationResult {
 }
 
 type ResultType = 'WIN' | 'LOSS' | 'ABORT' | null;
+
+interface NotificationState {
+    show: boolean;
+    message: string;
+    type: 'error' | 'success' | 'info';
+}
 
 const App: React.FC = () => {
   const [isSessionStarted, setIsSessionStarted] = useState(false);
@@ -89,8 +98,17 @@ const App: React.FC = () => {
   const [simResult, setSimResult] = useState<SimulationResult | null>(null);
   const [tableHealth, setTableHealth] = useState<SimulationResult | null>(null);
   
+  // Modal & Notification States
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [notification, setNotification] = useState<NotificationState>({ show: false, message: '', type: 'info' });
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastProcessedSpinCount = useRef<number>(-1);
+
+  const showNotification = (message: string, type: 'error' | 'success' | 'info' = 'info') => {
+      setNotification({ show: true, message, type });
+      setTimeout(() => setNotification(prev => ({ ...prev, show: false })), 5000);
+  };
 
   const progressionLevels = useMemo(() => [
     selectedUnit * 1,   // G1: 1.00
@@ -107,27 +125,28 @@ const App: React.FC = () => {
     setIsSessionStarted(true);
   };
 
-  const handleResetSession = () => {
-    if (confirm("Deseja resetar o Vortex e recalibrar os padrões?")) {
-      setIsSessionStarted(false);
-      setHistory([]);
-      setSimResult(null);
-      setTableHealth(null);
-      setSignal({
-        status: SystemStatus.NO_SIGNAL,
-        targetColumn: null,
-        activeTrigger: TriggerType.NONE,
-        progressionStep: 0,
-        isAwaitingResult: false,
-        cooldownCounter: 0,
-        showOverlay: false,
-        investedInCycle: 0,
-        signalHealth: 0,
-        isPaused: false,
-        abortReason: null,
-        vortexScore: 0
-      });
-    }
+  const executeReset = () => {
+    setIsSessionStarted(false);
+    setHistory([]);
+    setSimResult(null);
+    setTableHealth(null);
+    setSignal({
+      status: SystemStatus.NO_SIGNAL,
+      targetColumn: null,
+      activeTrigger: TriggerType.NONE,
+      progressionStep: 0,
+      isAwaitingResult: false,
+      cooldownCounter: 0,
+      showOverlay: false,
+      investedInCycle: 0,
+      signalHealth: 0,
+      isPaused: false,
+      abortReason: null,
+      vortexScore: 0
+    });
+    setShowResetConfirm(false);
+    setInputValue('');
+    showNotification("Sistema reiniciado com sucesso.", "success");
   };
 
   const copyHistory = () => {
@@ -162,6 +181,7 @@ const App: React.FC = () => {
     });
     setHistory(newHistory.slice(0, 1000));
     setInputValue('');
+    showNotification(`${numbers.length} números injetados.`, "success");
   }, [inputValue, history]);
 
   // Função pura de simulação (Core Logic)
@@ -177,7 +197,6 @@ const App: React.FC = () => {
 
       const simHistory: SpinResult[] = [];
 
-      // Inicializa histórico mínimo
       for(let i=0; i<5; i++) {
           if(i < chronoNumbers.length) {
               simHistory.unshift({
@@ -188,7 +207,6 @@ const App: React.FC = () => {
           }
       }
 
-      // Loop principal
       for (let i = 5; i < chronoNumbers.length; i++) {
           const num = chronoNumbers[i];
           const col = getColumn(num);
@@ -246,15 +264,13 @@ const App: React.FC = () => {
           totalEntries: simTotalEntries,
           status
       };
-  }, [progressionLevels]); // analyzeSnapshot deve ser estável ou movida para dentro se mudar
+  }, [progressionLevels]);
 
-  // Função auxiliar de análise (mesma lógica do hook, mas pura)
   const analyzeSnapshot = (snapshotHistory: SpinResult[]) => {
       if (snapshotHistory.length < 5) return { isValid: false, target: null, score: 0 };
       
       const lastSpin = snapshotHistory[0];
 
-      // Afinidade
       let count1 = 0, count2 = 0, count3 = 0, total = 0;
       for (let i = 1; i < snapshotHistory.length; i++) {
           const prevSpin = snapshotHistory[i]; 
@@ -278,7 +294,6 @@ const App: React.FC = () => {
           if (maxP < 35) bestAffinityCol = null;
       }
 
-      // Padrão
       const window4 = snapshotHistory.slice(0, 4);
       let patternTarget = null;
       if (window4.length >= 2 && window4[0].column !== 0 && window4[0].column === window4[1].column) {
@@ -287,7 +302,6 @@ const App: React.FC = () => {
           patternTarget = window4[0].column;
       }
 
-      // Heat
       let heatTarget = null;
       let maxHeat = 0;
       for (let c=1; c<=3; c++) {
@@ -325,14 +339,13 @@ const App: React.FC = () => {
       };
   };
 
-  // Run manual simulation from Input
   const runManualSimulation = () => {
     const rawNumbers = inputValue.split(/[,\s\n]+/)
       .map(n => parseInt(n.trim(), 10))
       .filter(n => !isNaN(n) && n >= 0 && n <= 36);
 
     if (rawNumbers.length < 10) {
-        alert("Insira pelo menos 10 números para uma simulação precisa.");
+        showNotification("Insira pelo menos 10 números para backtest.", "error");
         return;
     }
     const chronoNumbers = [...rawNumbers].reverse();
@@ -340,25 +353,19 @@ const App: React.FC = () => {
     setSimResult(result);
   };
 
-  // Monitoramento em Tempo Real do Histórico (Automático)
   useEffect(() => {
     if (history.length < 10) return;
-    
-    // Converte o histórico atual (Newest -> Oldest) para cronológico (Oldest -> Newest) para simulação
     const chronoNumbers = history.map(s => s.number).reverse();
     const result = executeSimulation(chronoNumbers);
     setTableHealth(result);
-
   }, [history, executeSimulation]);
 
-  // Helper helper function to read file as base64 promise
   const readFileAsBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => {
             if (reader.result) {
                 const result = reader.result as string;
-                // Remove data URL prefix if present
                 const base64 = result.includes(',') ? result.split(',')[1] : result;
                 resolve(base64);
             } else {
@@ -377,15 +384,11 @@ const App: React.FC = () => {
     setIsAnalyzing(true);
     
     try {
-        // 1. Check API Key
         if (!process.env.API_KEY) {
-            throw new Error("Chave de API não configurada. Verifique o ambiente.");
+            throw new Error("Chave de API não configurada. Use entrada manual.");
         }
 
-        // 2. Read File (Async)
         const base64Content = await readFileAsBase64(file);
-
-        // 3. Setup Gemini API with Timeout
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         
         const apiCallPromise = ai.models.generateContent({
@@ -408,15 +411,12 @@ const App: React.FC = () => {
             }
         });
 
-        // Timeout Promise (15 seconds)
         const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error("Tempo limite de 15s excedido. API lenta ou sem resposta.")), 15000)
+            setTimeout(() => reject(new Error("Tempo limite excedido. Tente novamente.")), 15000)
         );
 
-        // Race API vs Timeout
         const response: any = await Promise.race([apiCallPromise, timeoutPromise]);
         
-        // 4. Parse Result
         const responseText = response.text;
         
         if (responseText) {
@@ -424,7 +424,6 @@ const App: React.FC = () => {
             try {
                 extractedNumbers = JSON.parse(responseText);
             } catch (jsonError) {
-                // Fallback regex if JSON fails
                 const matches = responseText.match(/\d+/g);
                 if (matches) extractedNumbers = matches.map(Number);
             }
@@ -432,20 +431,20 @@ const App: React.FC = () => {
             if (Array.isArray(extractedNumbers) && extractedNumbers.length > 0) {
                  const cleanNumbers = extractedNumbers.map(n => Number(n)).filter(n => !isNaN(n) && n >= 0 && n <= 36);
                  setInputValue(cleanNumbers.join(', '));
+                 showNotification(`${cleanNumbers.length} números identificados!`, "success");
             } else {
-                throw new Error("Nenhum número válido identificado na imagem.");
+                throw new Error("Nenhum número válido identificado.");
             }
         } else {
             throw new Error("Resposta vazia da IA.");
         }
 
     } catch (error: any) {
-        console.error("OCR Error Details:", error);
+        console.error("OCR Error:", error);
         let msg = "Erro ao processar imagem.";
-        if (error.message) msg += " " + error.message;
-        alert(msg);
+        if (error.message) msg = error.message;
+        showNotification(msg, "error");
     } finally {
-        // 5. Always stop loading
         setIsAnalyzing(false);
         if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -641,7 +640,35 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen p-4 flex flex-col items-center max-w-7xl mx-auto pb-20">
+    <div className="min-h-screen pb-20 bg-black">
+      
+      {/* TOAST NOTIFICATION */}
+      {notification.show && (
+          <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 z-[1000] px-6 py-4 rounded-2xl border shadow-2xl flex items-center gap-3 animate-in slide-in-from-top-4 fade-in duration-300 ${notification.type === 'error' ? 'bg-[#160606] border-rose-500/50 text-white' : notification.type === 'success' ? 'bg-[#06160d] border-emerald-500/50 text-white' : 'bg-slate-900 border-slate-700 text-white'}`}>
+             {notification.type === 'error' ? <AlertTriangle size={20} className="text-rose-500" /> : notification.type === 'success' ? <CheckCircle2 size={20} className="text-emerald-500" /> : <Info size={20} className="text-sky-500" />}
+             <span className="text-xs font-black uppercase tracking-wide">{notification.message}</span>
+          </div>
+      )}
+
+      {/* CONFIRM RESET MODAL */}
+      {showResetConfirm && (
+        <div className="fixed inset-0 z-[900] flex items-center justify-center p-4 backdrop-blur-md bg-black/90 animate-in fade-in duration-300">
+           <div className="w-full max-w-sm bg-card border border-rose-500/30 rounded-[32px] p-8 shadow-2xl relative">
+              <div className="flex flex-col items-center text-center mb-6">
+                  <div className="w-16 h-16 rounded-2xl bg-rose-500/10 flex items-center justify-center mb-4 text-rose-500">
+                     <Power size={32} />
+                  </div>
+                  <h3 className="text-xl font-black text-white uppercase mb-2">Reiniciar Sistema?</h3>
+                  <p className="text-xs font-bold text-slate-500">Isso apagará todo o histórico, estatísticas e recalibrará a IA do zero.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                 <button onClick={() => setShowResetConfirm(false)} className="py-3 rounded-xl bg-slate-900 text-slate-400 font-black text-xs uppercase hover:bg-slate-800 transition-all">Cancelar</button>
+                 <button onClick={executeReset} className="py-3 rounded-xl bg-rose-600 text-white font-black text-xs uppercase hover:bg-rose-500 transition-all shadow-lg shadow-rose-600/20">Confirmar Reset</button>
+              </div>
+           </div>
+        </div>
+      )}
+
       {/* SIMULATION RESULT MODAL (MANUAL) */}
       {simResult && (
         <div className="fixed inset-0 z-[700] flex items-center justify-center p-4 backdrop-blur-md bg-black/90 animate-in fade-in duration-300">
@@ -686,7 +713,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* ÁREA DE ALERTA CRÍTICO (SE A MESA ESTIVER RUIM) */}
+      {/* ÁREA DE ALERTA CRÍTICO FIXA (SE A MESA ESTIVER RUIM) */}
       {tableHealth && (tableHealth.status === 'BAD' || tableHealth.status === 'CRITICAL') && (
           <div className="fixed top-0 left-0 w-full z-[800] bg-rose-600 text-white py-2 flex items-center justify-center gap-3 animate-pulse shadow-2xl shadow-rose-600/50">
              <Siren className="animate-bounce" />
@@ -694,198 +721,200 @@ const App: React.FC = () => {
           </div>
       )}
 
-      {/* ÁREA DE SINAL FIXA */}
-      <div className={`w-full bg-card rounded-[24px] border border-slate-800 shadow-2xl mb-8 sticky ${tableHealth && (tableHealth.status === 'BAD' || tableHealth.status === 'CRITICAL') ? 'top-12' : 'top-4'} z-[100] overflow-hidden backdrop-blur-xl transition-all duration-300`}>
-        <div className="bg-card-header px-8 py-5 flex justify-between items-center">
-           <div className="flex items-center gap-4">
-              <div className={`w-4 h-4 rounded-full ${signal.status === SystemStatus.AUTHORIZED ? 'bg-purple-500 animate-pulse shadow-[0_0_15px_#a855f7]' : signal.status === SystemStatus.OBSERVATION ? 'bg-amber-500' : 'bg-rose-500'}`} />
-              <div className="flex flex-col">
-                 <span className={`text-[12px] font-black uppercase tracking-widest ${signal.status === SystemStatus.AUTHORIZED ? 'text-neon-purple' : signal.status === SystemStatus.OBSERVATION ? 'text-neon-amber' : 'text-neon-red'}`}>{signal.status}</span>
-                 <span className="text-[9px] font-bold text-slate-600 uppercase">Vortex 5.0 Hybrid Engine</span>
-              </div>
-           </div>
-           
-           {/* Monitor de Saúde da Mesa no Header */}
-           {tableHealth && (
-               <div className={`hidden md:flex items-center gap-2 px-3 py-1 rounded-lg border ${tableHealth.status === 'EXCELLENT' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : tableHealth.status === 'GOOD' ? 'bg-teal-500/10 border-teal-500/30 text-teal-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
-                   <ActivityIndicator status={tableHealth.status} />
-                   <div className="flex flex-col">
-                       <span className="text-[8px] font-black uppercase">Qualidade da Mesa</span>
-                       <span className="text-[10px] font-bold">{tableHealth.status === 'EXCELLENT' ? 'Excelente' : tableHealth.status === 'GOOD' ? 'Estável' : 'Ruim'}</span>
-                   </div>
-               </div>
-           )}
+      {/* ÁREA DE SINAL FIXA (TOPO FIXO) */}
+      <div className={`sticky top-0 z-[100] w-full bg-black/80 backdrop-blur-xl border-b border-slate-800 shadow-2xl mb-8 transition-all duration-300`}>
+        <div className="max-w-7xl mx-auto">
+            <div className="px-6 py-4 flex justify-between items-center">
+                <div className="flex items-center gap-4">
+                    <div className={`w-3 h-3 rounded-full ${signal.status === SystemStatus.AUTHORIZED ? 'bg-green-500 animate-pulse shadow-[0_0_15px_#22c55e]' : signal.status === SystemStatus.OBSERVATION ? 'bg-amber-500' : 'bg-rose-500'}`} />
+                    <div className="flex flex-col">
+                        <span className={`text-[13px] font-black uppercase tracking-widest ${signal.status === SystemStatus.AUTHORIZED ? 'text-green-400' : signal.status === SystemStatus.OBSERVATION ? 'text-amber-400' : 'text-rose-500'}`}>{signal.status}</span>
+                        {signal.status === SystemStatus.AUTHORIZED && <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Entrada Confirmada</span>}
+                    </div>
+                </div>
 
-           <div className="flex gap-12">
-              <HeaderMetric label="Banca Real" value={`R$ ${stats.currentBank.toFixed(2)}`} color="text-white" />
-              <HeaderMetric label="Lucro/Preju" value={`R$ ${stats.profit.toFixed(2)}`} color={stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
-              <HeaderMetric label="Assertividade" value={`${winRate.toFixed(1)}%`} color="text-purple-400" />
-           </div>
-        </div>
+                <div className="hidden md:flex gap-8">
+                    <HeaderMetric label="Banca Real" value={`R$ ${stats.currentBank.toFixed(2)}`} color="text-white" />
+                    <HeaderMetric label="Lucro/Preju" value={`R$ ${stats.profit.toFixed(2)}`} color={stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
+                </div>
+            </div>
 
-        {/* BARRA DE DETALHES DA PROGRESSÃO */}
-        <div className="px-8 py-4 bg-black/40 flex items-center justify-between border-t border-slate-800/50">
-           <div className="flex items-center gap-6">
-              <div className="flex flex-col">
-                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">
-                    Ciclo {signal.progressionStep > 0 ? `- Nível ${signal.progressionStep}/5` : ''}
-                  </span>
-                  <div className="flex gap-2">
-                     {[1, 2, 3, 4, 5].map(step => (
-                       <div key={step} className={`h-2 w-8 rounded-full transition-all duration-500 ${signal.progressionStep >= step ? 'bg-purple-500 shadow-[0_0_8px_#a855f7]' : 'bg-slate-800'}`} />
-                     ))}
-                  </div>
-              </div>
-              {signal.progressionStep > 0 && (
-                  <div className="px-3 py-1 bg-purple-500/10 border border-purple-500/20 rounded-lg animate-pulse flex items-center gap-2">
-                      <div className="w-2 h-2 rounded-full bg-purple-500 animate-ping"></div>
-                      <span className="text-purple-500 font-black text-xs">G{signal.progressionStep} ATIVO</span>
-                  </div>
-              )}
-           </div>
-
-           <div className="flex items-center gap-5">
-              <div className="flex flex-col items-end">
-                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">
-                      {signal.targetColumn ? 'Entrada Atual' : 'Status'}
-                  </span>
-                  <div className="flex items-center gap-3">
-                      {signal.targetColumn ? (
-                          <>
-                            <span className="text-white font-black text-lg uppercase">COLUNA {signal.targetColumn}</span>
-                            {signal.progressionStep > 0 && (
-                                <span className="text-purple-400 font-black text-lg bg-purple-500/5 px-3 py-0.5 rounded border border-purple-500/10">
-                                    R$ {currentBetValue.toFixed(2)}
-                                </span>
-                            )}
-                          </>
-                      ) : (
-                          <span className="text-slate-600 font-black text-sm uppercase">Aguardando Confluência...</span>
-                      )}
-                  </div>
-              </div>
-           </div>
+            {/* PROGRESS BAR STRIP */}
+            <div className="h-1 w-full bg-slate-900">
+                {signal.progressionStep > 0 && (
+                    <div className="h-full bg-purple-500 transition-all duration-500 shadow-[0_0_10px_#a855f7]" style={{ width: `${(signal.progressionStep / 5) * 100}%` }} />
+                )}
+            </div>
         </div>
       </div>
 
-      <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
-        <div className="lg:col-span-4 space-y-8">
-           <section className="bg-card rounded-[28px] p-8 border border-slate-800 shadow-xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 p-4 opacity-10">
-                  <Atom size={120} />
-              </div>
-              <div className="flex justify-between items-center mb-6 relative z-10">
-                <h3 className={`text-sm font-black uppercase tracking-tight ${analysis?.isValid ? 'text-purple-500' : 'text-slate-400'}`}>Score Vortex</h3>
-                <span className={`text-2xl font-black ${analysis?.score >= 65 ? 'text-purple-400' : 'text-slate-600'}`}>
-                    {analysis?.score || 0}<span className="text-xs align-top text-slate-600">/100</span>
-                </span>
-              </div>
-              
-              <div className="space-y-4 relative z-10">
-                 <p className="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest">Fatores de Entrada</p>
-                 
-                 <ScoreItem 
-                    label="Afinidade (Puxador)" 
-                    value={analysis?.affinity.bestCol ? `COL ${analysis.affinity.bestCol} (${analysis.affinity.confidence.toFixed(0)}%)` : "Sem Dados"}
-                    active={!!analysis?.affinity.bestCol} 
-                    score={analysis?.affinity.bestCol ? 40 : 0}
-                    icon={<Magnet size={14} />}
-                 />
-                 <ScoreItem 
-                    label="Padrão (Micro)" 
-                    value={analysis?.patternTarget ? `COL ${analysis.patternTarget} (${analysis.patternType})` : "Sem Padrão"}
-                    active={!!analysis?.patternTarget} 
-                    score={analysis?.patternTarget ? 35 : 0}
-                    icon={<Binary size={14} />}
-                 />
-                 <ScoreItem 
-                    label="Dominância (Macro)" 
-                    value={analysis?.heatTarget ? `COL ${analysis.heatTarget} (>40%)` : "Neutro"}
-                    active={!!analysis?.heatTarget} 
-                    score={analysis?.heatTarget ? 25 : 0}
-                    icon={<Flame size={14} />}
-                 />
-              </div>
+      <div className="w-full flex flex-col items-center max-w-7xl mx-auto px-4">
+        {/* MAIN SIGNAL CARD (BELOW FIXED HEADER) */}
+        <div className="w-full bg-card rounded-[24px] border border-slate-800 shadow-2xl mb-8 p-8 relative overflow-hidden">
+             <div className="absolute top-0 right-0 p-8 opacity-5 pointer-events-none">
+                <Target size={180} />
+             </div>
+             
+             <div className="flex flex-col md:flex-row items-center justify-between gap-8 relative z-10">
+                <div className="flex flex-col gap-2">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Alvo Identificado</span>
+                    <div className="flex items-center gap-4">
+                        {signal.targetColumn ? (
+                            <h2 className="text-6xl font-black text-white tracking-tighter">COL {signal.targetColumn}</h2>
+                        ) : (
+                            <h2 className="text-4xl font-black text-slate-700 tracking-tighter">AGUARDANDO</h2>
+                        )}
+                        {signal.targetColumn && (
+                             <div className="flex flex-col gap-1">
+                                <span className="bg-purple-600 text-white px-3 py-1 rounded text-[10px] font-black uppercase">Vortex {analysis?.score}%</span>
+                                {signal.progressionStep > 0 && <span className="text-slate-400 text-xs font-bold">G{signal.progressionStep} - R$ {currentBetValue.toFixed(2)}</span>}
+                             </div>
+                        )}
+                    </div>
+                </div>
 
-              {analysis?.isValid && (
-                  <div className="mt-8 pt-6 border-t border-slate-800/50">
-                      <div className="bg-purple-500/10 border border-purple-500/20 rounded-xl p-4 flex items-center gap-3">
-                          <CheckCircle2 className="text-purple-500" />
-                          <div>
-                              <p className="text-purple-400 text-xs font-black uppercase">Confluência Detectada</p>
-                              <p className="text-slate-400 text-[10px] font-bold">Alvo Coluna {analysis.target} confirmado por múltiplos fatores.</p>
-                          </div>
-                      </div>
-                  </div>
-              )}
-           </section>
+                <div className="flex gap-4">
+                     <div className="bg-slate-900/50 p-4 rounded-2xl border border-slate-800 text-center w-32">
+                         <span className="text-[9px] font-black text-slate-500 uppercase">Assertividade</span>
+                         <p className="text-xl font-black text-purple-400">{winRate.toFixed(0)}%</p>
+                     </div>
+                     <div className="bg-slate-900/50 p-4 rounded-2xl border border-slate-800 text-center w-32">
+                         <span className="text-[9px] font-black text-slate-500 uppercase">Ciclo Atual</span>
+                         <p className="text-xl font-black text-white">{signal.progressionStep}/5</p>
+                     </div>
+                </div>
+             </div>
         </div>
 
-        <div className="lg:col-span-5 space-y-8">
-           <section className="bg-card rounded-[28px] p-8 border border-slate-800 shadow-xl">
-              <div className="grid grid-cols-6 gap-1.5 mb-8">
-                 {[0, ...Array.from({length: 36}, (_, i) => i + 1)].map(n => (
-                   <button key={n} onClick={() => addNumber(n)} className={`h-11 text-[12px] font-black rounded-xl border transition-all active:scale-90 ${n === 0 ? 'bg-purple-600 border-purple-400 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'}`}>{n}</button>
-                 ))}
-              </div>
-              <textarea className="w-full bg-black border border-slate-800 rounded-2xl p-6 text-[13px] font-mono text-white focus:border-purple-500 outline-none h-40 mb-6 custom-scroll" placeholder="Ex: 21, 9, 10, 19..." value={inputValue} onChange={e => setInputValue(e.target.value)} />
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                <button onClick={pasteNumbers} className="bg-purple-600 hover:bg-purple-500 text-white py-4 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95">Injetar Dados</button>
-                <button onClick={runManualSimulation} className="bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2">
-                    <FlaskConical size={16} /> Simular Backtest
-                </button>
-              </div>
-              <div className="flex gap-4">
-                 <button 
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={isAnalyzing}
-                    className="flex-1 px-6 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-black text-xs uppercase transition-all flex items-center justify-center gap-2 border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed h-12"
-                 >
-                    {isAnalyzing ? <Loader2 size={20} className="animate-spin text-purple-500" /> : <ImageIcon size={20} />}
-                    {isAnalyzing ? 'Lendo...' : 'Ler Print'}
-                 </button>
-                 <button onClick={() => setHistory(prev => prev.slice(1))} className="w-20 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-center text-slate-500 hover:text-rose-500 transition-all h-12"><Trash2 size={22}/></button>
-              </div>
-              <input type="file" ref={fileInputRef} onChange={handleImageUpload} className="hidden" accept="image/*" />
-           </section>
+        <div className="w-full grid grid-cols-1 lg:grid-cols-12 gap-8">
+            <div className="lg:col-span-4 space-y-8">
+            <section className="bg-card rounded-[28px] p-8 border border-slate-800 shadow-xl relative overflow-hidden">
+                <div className="absolute top-0 right-0 p-4 opacity-10">
+                    <Atom size={120} />
+                </div>
+                <div className="flex justify-between items-center mb-6 relative z-10">
+                    <h3 className={`text-sm font-black uppercase tracking-tight ${analysis?.isValid ? 'text-purple-500' : 'text-slate-400'}`}>Score Vortex</h3>
+                    <span className={`text-2xl font-black ${analysis?.score >= 65 ? 'text-purple-400' : 'text-slate-600'}`}>
+                        {analysis?.score || 0}<span className="text-xs align-top text-slate-600">/100</span>
+                    </span>
+                </div>
+                
+                <div className="space-y-4 relative z-10">
+                    <p className="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest">Fatores de Entrada</p>
+                    
+                    <ScoreItem 
+                        label="Afinidade (Puxador)" 
+                        value={analysis?.affinity.bestCol ? `COL ${analysis.affinity.bestCol} (${analysis.affinity.confidence.toFixed(0)}%)` : "Sem Dados"}
+                        active={!!analysis?.affinity.bestCol} 
+                        score={analysis?.affinity.bestCol ? 40 : 0}
+                        icon={<Magnet size={14} />}
+                    />
+                    <ScoreItem 
+                        label="Padrão (Micro)" 
+                        value={analysis?.patternTarget ? `COL ${analysis.patternTarget} (${analysis.patternType})` : "Sem Padrão"}
+                        active={!!analysis?.patternTarget} 
+                        score={analysis?.patternTarget ? 35 : 0}
+                        icon={<Binary size={14} />}
+                    />
+                    <ScoreItem 
+                        label="Dominância (Macro)" 
+                        value={analysis?.heatTarget ? `COL ${analysis.heatTarget} (>40%)` : "Neutro"}
+                        active={!!analysis?.heatTarget} 
+                        score={analysis?.heatTarget ? 25 : 0}
+                        icon={<Flame size={14} />}
+                    />
+                </div>
 
-           <section className="bg-card rounded-[28px] p-8 border border-slate-800 shadow-xl">
-              <h3 className="text-[11px] font-black text-slate-400 uppercase mb-8 flex items-center gap-3 tracking-widest"><BarChart3 size={18} className="text-purple-500" /> Estatísticas Financeiras</h3>
-              <div className="grid grid-cols-2 gap-5">
-                 <MetricBox label="Lucro Líquido" value={`R$ ${stats.profit.toFixed(2)}`} color={stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
-                 <MetricBox label="Banca em Conta" value={`R$ ${stats.currentBank.toFixed(2)}`} />
-                 <MetricBox label="Ciclos Green" value={stats.wins} color="text-emerald-400" />
-                 <MetricBox label="Ciclos Red" value={stats.losses} color="text-rose-400" />
-              </div>
-           </section>
-        </div>
-
-        <div className="lg:col-span-3">
-           <section className="bg-card rounded-[28px] p-8 border border-slate-800 h-full flex flex-col shadow-xl">
-              <div className="flex items-center justify-between mb-8">
-                 <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3"><HistoryIcon size={18} className="text-purple-500" /> Histórico</h3>
-                 <button onClick={copyHistory} className="text-slate-500 hover:text-purple-400 transition-all flex items-center gap-2">
-                    {copied ? <Check size={16} className="text-purple-500" /> : <Copy size={16} />}
-                    <span className="text-[10px] font-black uppercase">{copied ? 'Copiado' : 'Exportar'}</span>
-                 </button>
-              </div>
-              <div className="space-y-3 overflow-y-auto max-h-[780px] pr-3 custom-scroll flex-1">
-                 {history.map((spin, i) => (
-                   <div key={i} className="flex items-center justify-between p-4 bg-black/40 border border-slate-900 rounded-2xl hover:border-slate-800 transition-all">
-                      <div className="flex items-center gap-4">
-                        <span className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm border-2 ${spin.number === 0 ? 'bg-purple-600 border-purple-400/50 text-white' : [1,4,7,10,13,16,19,22,25,28,31,34].includes(spin.number) ? 'bg-rose-600 border-rose-400/50 text-white' : 'bg-slate-900 border-slate-800 text-white'}`}>{spin.number}</span>
-                        <div className="flex flex-col gap-1">
-                           <div className="flex items-center gap-2">
-                               <span className="text-[11px] font-black text-slate-300 uppercase tracking-tight">COLUNA {spin.column || 'ZERO'}</span>
-                               <AffinityBadge num={spin.number} />
-                           </div>
-                           <span className="text-[9px] font-bold text-slate-600">{spin.timestamp}</span>
+                {analysis?.isValid && (
+                    <div className="mt-8 pt-6 border-t border-slate-800/50">
+                        <div className="bg-purple-500/10 border border-purple-500/20 rounded-xl p-4 flex items-center gap-3">
+                            <CheckCircle2 className="text-purple-500" />
+                            <div>
+                                <p className="text-purple-400 text-xs font-black uppercase">Confluência Detectada</p>
+                                <p className="text-slate-400 text-[10px] font-bold">Alvo Coluna {analysis.target} confirmado por múltiplos fatores.</p>
+                            </div>
                         </div>
-                      </div>
-                   </div>
-                 ))}
-              </div>
-           </section>
+                    </div>
+                )}
+            </section>
+            </div>
+
+            <div className="lg:col-span-5 space-y-8">
+            <section className="bg-card rounded-[28px] p-8 border border-slate-800 shadow-xl">
+                <div className="grid grid-cols-6 gap-1.5 mb-8">
+                    {[0, ...Array.from({length: 36}, (_, i) => i + 1)].map(n => (
+                    <button key={n} onClick={() => addNumber(n)} className={`h-11 text-[12px] font-black rounded-xl border transition-all active:scale-90 ${n === 0 ? 'bg-purple-600 border-purple-400 text-white' : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'}`}>{n}</button>
+                    ))}
+                </div>
+                <textarea className="w-full bg-black border border-slate-800 rounded-2xl p-6 text-[13px] font-mono text-white focus:border-purple-500 outline-none h-40 mb-6 custom-scroll" placeholder="Ex: 21, 9, 10, 19..." value={inputValue} onChange={e => setInputValue(e.target.value)} />
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                    <button onClick={pasteNumbers} className="bg-purple-600 hover:bg-purple-500 text-white py-4 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95">Injetar Dados</button>
+                    <button onClick={runManualSimulation} className="bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2">
+                        <FlaskConical size={16} /> Simular Backtest
+                    </button>
+                </div>
+                <div className="flex gap-4">
+                    <button 
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={isAnalyzing}
+                        className="flex-1 px-6 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-black text-xs uppercase transition-all flex items-center justify-center gap-2 border border-slate-700 disabled:opacity-50 disabled:cursor-not-allowed h-12"
+                    >
+                        {isAnalyzing ? <Loader2 size={20} className="animate-spin text-purple-500" /> : <ImageIcon size={20} />}
+                        {isAnalyzing ? 'Lendo...' : 'Ler Print'}
+                    </button>
+                    <button onClick={() => setHistory(prev => prev.slice(1))} className="w-20 bg-slate-900 border border-slate-800 rounded-2xl flex items-center justify-center text-slate-500 hover:text-rose-500 transition-all h-12"><Trash2 size={22}/></button>
+                </div>
+                <input type="file" ref={fileInputRef} onChange={handleImageUpload} className="hidden" accept="image/*" />
+            </section>
+
+            <section className="bg-card rounded-[28px] p-8 border border-slate-800 shadow-xl">
+                <h3 className="text-[11px] font-black text-slate-400 uppercase mb-8 flex items-center gap-3 tracking-widest"><BarChart3 size={18} className="text-purple-500" /> Estatísticas Financeiras</h3>
+                <div className="grid grid-cols-2 gap-5">
+                    <MetricBox label="Lucro Líquido" value={`R$ ${stats.profit.toFixed(2)}`} color={stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
+                    <MetricBox label="Banca em Conta" value={`R$ ${stats.currentBank.toFixed(2)}`} />
+                    <MetricBox label="Ciclos Green" value={stats.wins} color="text-emerald-400" />
+                    <MetricBox label="Ciclos Red" value={stats.losses} color="text-rose-400" />
+                </div>
+            </section>
+            </div>
+
+            <div className="lg:col-span-3">
+            <section className="bg-card rounded-[28px] p-8 border border-slate-800 h-full flex flex-col shadow-xl">
+                <div className="flex items-center justify-between mb-8">
+                    <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3"><HistoryIcon size={18} className="text-purple-500" /> Histórico</h3>
+                    <button onClick={copyHistory} className="text-slate-500 hover:text-purple-400 transition-all flex items-center gap-2">
+                        {copied ? <Check size={16} className="text-purple-500" /> : <Copy size={16} />}
+                        <span className="text-[10px] font-black uppercase">{copied ? 'Copiado' : 'Exportar'}</span>
+                    </button>
+                </div>
+                <div className="space-y-3 overflow-y-auto max-h-[780px] pr-3 custom-scroll flex-1">
+                    {history.map((spin, i) => (
+                    <div key={i} className="flex items-center justify-between p-4 bg-black/40 border border-slate-900 rounded-2xl hover:border-slate-800 transition-all">
+                        <div className="flex items-center gap-4">
+                            <span className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm border-2 ${spin.number === 0 ? 'bg-purple-600 border-purple-400/50 text-white' : [1,4,7,10,13,16,19,22,25,28,31,34].includes(spin.number) ? 'bg-rose-600 border-rose-400/50 text-white' : 'bg-slate-900 border-slate-800 text-white'}`}>{spin.number}</span>
+                            <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2">
+                                <span className="text-[11px] font-black text-slate-300 uppercase tracking-tight">COLUNA {spin.column || 'ZERO'}</span>
+                                <AffinityBadge num={spin.number} />
+                            </div>
+                            <span className="text-[9px] font-bold text-slate-600">{spin.timestamp}</span>
+                            </div>
+                        </div>
+                    </div>
+                    ))}
+                </div>
+            </section>
+            </div>
+        </div>
+
+        {/* FOOTER */}
+        <div className="w-full mt-12 grid grid-cols-1 md:grid-cols-4 gap-5">
+            <FooterCard icon={<TrendingUp size={20} className="text-purple-500" />} label="Padrão Ativo" value={analysis?.patternType || "NENHUM"} />
+            <FooterCard icon={<Magnet size={20} className="text-sky-500" />} label="Puxador (Afinidade)" value={analysis?.affinity.bestCol ? `COLUNA ${analysis.affinity.bestCol}` : "N/A"} />
+            <FooterCard icon={<Atom size={20} className="text-purple-400" />} label="Hybrid Score" value={analysis ? `${analysis.score}/100` : "--"} />
+            <button onClick={() => setShowResetConfirm(true)} className="bg-slate-900/40 hover:bg-rose-500/10 border border-slate-800 text-slate-600 hover:text-rose-500 p-6 rounded-[24px] transition-all flex items-center justify-center gap-4 font-black text-[11px] uppercase tracking-widest cursor-pointer active:scale-95">
+                <RotateCcw size={18} /> Zerar Sistema
+            </button>
         </div>
       </div>
 
@@ -924,19 +953,10 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* FOOTER */}
-      <div className="w-full mt-12 grid grid-cols-1 md:grid-cols-4 gap-5">
-         <FooterCard icon={<TrendingUp size={20} className="text-purple-500" />} label="Padrão Ativo" value={analysis?.patternType || "NENHUM"} />
-         <FooterCard icon={<Magnet size={20} className="text-sky-500" />} label="Puxador (Afinidade)" value={analysis?.affinity.bestCol ? `COLUNA ${analysis.affinity.bestCol}` : "N/A"} />
-         <FooterCard icon={<Atom size={20} className="text-purple-400" />} label="Hybrid Score" value={analysis ? `${analysis.score}/100` : "--"} />
-         <button onClick={handleResetSession} className="bg-slate-900/40 hover:bg-rose-500/10 border border-slate-800 text-slate-600 hover:text-rose-500 p-6 rounded-[24px] transition-all flex items-center justify-center gap-4 font-black text-[11px] uppercase tracking-widest">
-            <RotateCcw size={18} /> Zerar Sistema
-         </button>
-      </div>
     </div>
   );
 };
-
+// ... (Component exports remain the same)
 const HeaderMetric: React.FC<{ label: string; value: string | number; color?: string }> = ({ label, value, color = 'text-slate-400' }) => (
   <div className="flex flex-col items-end">
     <p className="text-[9px] font-black text-slate-600 uppercase tracking-[0.1em] mb-1">{label}</p>
