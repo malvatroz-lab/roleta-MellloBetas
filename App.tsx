@@ -34,7 +34,8 @@ import {
   Image as ImageIcon,
   Loader2,
   FlaskConical,
-  AlertTriangle
+  AlertTriangle,
+  Siren
 } from 'lucide-react';
 
 interface ExtendedSignalState extends SignalState {
@@ -86,6 +87,7 @@ const App: React.FC = () => {
   const [inputValue, setInputValue] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [simResult, setSimResult] = useState<SimulationResult | null>(null);
+  const [tableHealth, setTableHealth] = useState<SimulationResult | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastProcessedSpinCount = useRef<number>(-1);
@@ -110,6 +112,7 @@ const App: React.FC = () => {
       setIsSessionStarted(false);
       setHistory([]);
       setSimResult(null);
+      setTableHealth(null);
       setSignal({
         status: SystemStatus.NO_SIGNAL,
         targetColumn: null,
@@ -161,13 +164,97 @@ const App: React.FC = () => {
     setInputValue('');
   }, [inputValue, history]);
 
-  // Função independente de análise para uso na simulação
+  // Função pura de simulação (Core Logic)
+  const executeSimulation = useCallback((chronoNumbers: number[]): SimulationResult => {
+      let simProfit = 0;
+      let simWins = 0;
+      let simLosses = 0;
+      let simTotalEntries = 0;
+      
+      let currentTier = 0;
+      let currentTargetCol: number | null = null;
+      let currentInvested = 0;
+
+      const simHistory: SpinResult[] = [];
+
+      // Inicializa histórico mínimo
+      for(let i=0; i<5; i++) {
+          if(i < chronoNumbers.length) {
+              simHistory.unshift({
+                  number: chronoNumbers[i],
+                  column: getColumn(chronoNumbers[i]),
+                  timestamp: '00:00'
+              });
+          }
+      }
+
+      // Loop principal
+      for (let i = 5; i < chronoNumbers.length; i++) {
+          const num = chronoNumbers[i];
+          const col = getColumn(num);
+
+          if (currentTargetCol !== null) {
+              const betAmount = progressionLevels[currentTier];
+              currentInvested += betAmount;
+
+              if (col === currentTargetCol) {
+                  const winAmount = betAmount * 3;
+                  simProfit += (winAmount - currentInvested);
+                  simWins++;
+                  simTotalEntries++;
+                  currentTargetCol = null;
+                  currentTier = 0;
+                  currentInvested = 0;
+              } else {
+                  if (currentTier < 4) {
+                      currentTier++;
+                  } else {
+                      simProfit -= currentInvested;
+                      simLosses++;
+                      simTotalEntries++;
+                      currentTargetCol = null;
+                      currentTier = 0;
+                      currentInvested = 0;
+                  }
+              }
+          } 
+          
+          if (currentTargetCol === null) {
+              const analysis = analyzeSnapshot(simHistory);
+              if (analysis.isValid && analysis.target) {
+                  currentTargetCol = analysis.target;
+                  currentTier = 0; 
+              }
+          }
+
+          simHistory.unshift({
+              number: num,
+              column: col,
+              timestamp: '00:00'
+          });
+      }
+
+      let status: SimulationResult['status'] = 'BAD';
+      if (simProfit > 0 && simLosses === 0) status = 'EXCELLENT';
+      else if (simProfit > 0) status = 'GOOD';
+      else if (simProfit < -20) status = 'CRITICAL';
+
+      return {
+          profit: simProfit,
+          wins: simWins,
+          losses: simLosses,
+          totalEntries: simTotalEntries,
+          status
+      };
+  }, [progressionLevels]); // analyzeSnapshot deve ser estável ou movida para dentro se mudar
+
+  // Função auxiliar de análise (mesma lógica do hook, mas pura)
   const analyzeSnapshot = (snapshotHistory: SpinResult[]) => {
       if (snapshotHistory.length < 5) return { isValid: false, target: null, score: 0 };
       
       const lastSpin = snapshotHistory[0];
 
-      // Afinidade Lógica
+      // Afinidade
       let count1 = 0, count2 = 0, count3 = 0, total = 0;
       for (let i = 1; i < snapshotHistory.length; i++) {
           const prevSpin = snapshotHistory[i]; 
@@ -191,7 +278,7 @@ const App: React.FC = () => {
           if (maxP < 35) bestAffinityCol = null;
       }
 
-      // Pattern Logic
+      // Padrão
       const window4 = snapshotHistory.slice(0, 4);
       let patternTarget = null;
       if (window4.length >= 2 && window4[0].column !== 0 && window4[0].column === window4[1].column) {
@@ -200,7 +287,7 @@ const App: React.FC = () => {
           patternTarget = window4[0].column;
       }
 
-      // Heat Logic
+      // Heat
       let heatTarget = null;
       let maxHeat = 0;
       for (let c=1; c<=3; c++) {
@@ -238,7 +325,8 @@ const App: React.FC = () => {
       };
   };
 
-  const runSimulation = () => {
+  // Run manual simulation from Input
+  const runManualSimulation = () => {
     const rawNumbers = inputValue.split(/[,\s\n]+/)
       .map(n => parseInt(n.trim(), 10))
       .filter(n => !isNaN(n) && n >= 0 && n <= 36);
@@ -247,86 +335,38 @@ const App: React.FC = () => {
         alert("Insira pelo menos 10 números para uma simulação precisa.");
         return;
     }
-
     const chronoNumbers = [...rawNumbers].reverse();
+    const result = executeSimulation(chronoNumbers);
+    setSimResult(result);
+  };
 
-    let simProfit = 0;
-    let simWins = 0;
-    let simLosses = 0;
-    let simTotalEntries = 0;
+  // Monitoramento em Tempo Real do Histórico (Automático)
+  useEffect(() => {
+    if (history.length < 10) return;
     
-    let currentTier = 0;
-    let currentTargetCol: number | null = null;
-    let currentInvested = 0;
+    // Converte o histórico atual (Newest -> Oldest) para cronológico (Oldest -> Newest) para simulação
+    const chronoNumbers = history.map(s => s.number).reverse();
+    const result = executeSimulation(chronoNumbers);
+    setTableHealth(result);
 
-    const simHistory: SpinResult[] = [];
+  }, [history, executeSimulation]);
 
-    for(let i=0; i<5; i++) {
-        if(i < chronoNumbers.length) {
-            simHistory.unshift({
-                number: chronoNumbers[i],
-                column: getColumn(chronoNumbers[i]),
-                timestamp: '00:00'
-            });
-        }
-    }
-
-    for (let i = 5; i < chronoNumbers.length; i++) {
-        const num = chronoNumbers[i];
-        const col = getColumn(num);
-
-        if (currentTargetCol !== null) {
-            const betAmount = progressionLevels[currentTier];
-            currentInvested += betAmount;
-
-            if (col === currentTargetCol) {
-                const winAmount = betAmount * 3;
-                simProfit += (winAmount - currentInvested);
-                simWins++;
-                simTotalEntries++;
-                currentTargetCol = null;
-                currentTier = 0;
-                currentInvested = 0;
+  // Helper helper function to read file as base64 promise
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            if (reader.result) {
+                const result = reader.result as string;
+                // Remove data URL prefix if present
+                const base64 = result.includes(',') ? result.split(',')[1] : result;
+                resolve(base64);
             } else {
-                if (currentTier < 4) {
-                    currentTier++;
-                } else {
-                    simProfit -= currentInvested;
-                    simLosses++;
-                    simTotalEntries++;
-                    currentTargetCol = null;
-                    currentTier = 0;
-                    currentInvested = 0;
-                }
+                reject(new Error("Falha ao ler dados do arquivo."));
             }
-        } 
-        
-        if (currentTargetCol === null) {
-             const analysis = analyzeSnapshot(simHistory);
-             if (analysis.isValid && analysis.target) {
-                 currentTargetCol = analysis.target;
-                 currentTier = 0; 
-             }
-        }
-
-        simHistory.unshift({
-            number: num,
-            column: col,
-            timestamp: '00:00'
-        });
-    }
-
-    let status: SimulationResult['status'] = 'BAD';
-    if (simProfit > 0 && simLosses === 0) status = 'EXCELLENT';
-    else if (simProfit > 0) status = 'GOOD';
-    else if (simProfit < -20) status = 'CRITICAL';
-
-    setSimResult({
-        profit: simProfit,
-        wins: simWins,
-        losses: simLosses,
-        totalEntries: simTotalEntries,
-        status
+        };
+        reader.onerror = () => reject(new Error("Erro de leitura de arquivo."));
+        reader.readAsDataURL(file);
     });
   };
 
@@ -336,51 +376,79 @@ const App: React.FC = () => {
 
     setIsAnalyzing(true);
     
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-        try {
-            const base64Data = reader.result as string;
-            const base64Content = base64Data.split(',')[1];
-
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            const response = await ai.models.generateContent({
-              model: 'gemini-3-flash-preview',
-              contents: {
-                parts: [
-                  {
-                    inlineData: {
-                      mimeType: file.type,
-                      data: base64Content
-                    }
-                  },
-                  {
-                    text: "Identify the roulette numbers in this image. Return a single comma-separated list of the numbers found, preserving their order. Output ONLY numbers and commas."
-                  }
-                ]
-              }
-            });
-
-            const text = response.text;
-            if (text) {
-              const cleanText = text.replace(/[^0-9,]/g, '');
-              setInputValue(cleanText);
-            }
-        } catch (error) {
-            console.error("OCR Error:", error);
-            alert("Erro ao processar imagem. Verifique se a chave API está configurada e se a imagem é válida.");
-        } finally {
-            setIsAnalyzing(false);
-            if (fileInputRef.current) fileInputRef.current.value = '';
+    try {
+        // 1. Check API Key
+        if (!process.env.API_KEY) {
+            throw new Error("Chave de API não configurada. Verifique o ambiente.");
         }
-    };
 
-    reader.onerror = () => {
-        console.error("File Reader Error");
-        alert("Erro ao ler o arquivo de imagem.");
+        // 2. Read File (Async)
+        const base64Content = await readFileAsBase64(file);
+
+        // 3. Setup Gemini API with Timeout
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        
+        const apiCallPromise = ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: {
+                parts: [
+                    {
+                        inlineData: {
+                            mimeType: file.type || 'image/jpeg',
+                            data: base64Content
+                        }
+                    },
+                    {
+                        text: "Extract all roulette numbers from this image. Return strictly a JSON array of numbers. E.g.: [32, 15, 0]. Do not include markdown formatting."
+                    }
+                ]
+            },
+            config: {
+                responseMimeType: 'application/json'
+            }
+        });
+
+        // Timeout Promise (15 seconds)
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error("Tempo limite de 15s excedido. API lenta ou sem resposta.")), 15000)
+        );
+
+        // Race API vs Timeout
+        const response: any = await Promise.race([apiCallPromise, timeoutPromise]);
+        
+        // 4. Parse Result
+        const responseText = response.text;
+        
+        if (responseText) {
+            let extractedNumbers: any[] = [];
+            try {
+                extractedNumbers = JSON.parse(responseText);
+            } catch (jsonError) {
+                // Fallback regex if JSON fails
+                const matches = responseText.match(/\d+/g);
+                if (matches) extractedNumbers = matches.map(Number);
+            }
+
+            if (Array.isArray(extractedNumbers) && extractedNumbers.length > 0) {
+                 const cleanNumbers = extractedNumbers.map(n => Number(n)).filter(n => !isNaN(n) && n >= 0 && n <= 36);
+                 setInputValue(cleanNumbers.join(', '));
+            } else {
+                throw new Error("Nenhum número válido identificado na imagem.");
+            }
+        } else {
+            throw new Error("Resposta vazia da IA.");
+        }
+
+    } catch (error: any) {
+        console.error("OCR Error Details:", error);
+        let msg = "Erro ao processar imagem.";
+        if (error.message) msg += " " + error.message;
+        alert(msg);
+    } finally {
+        // 5. Always stop loading
         setIsAnalyzing(false);
-    };
-
-    reader.readAsDataURL(file);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const getNumberAffinity = useCallback((targetNum: number) => {
@@ -574,7 +642,7 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen p-4 flex flex-col items-center max-w-7xl mx-auto pb-20">
-      {/* SIMULATION RESULT MODAL */}
+      {/* SIMULATION RESULT MODAL (MANUAL) */}
       {simResult && (
         <div className="fixed inset-0 z-[700] flex items-center justify-center p-4 backdrop-blur-md bg-black/90 animate-in fade-in duration-300">
            <div className={`w-full max-w-lg rounded-[32px] border-2 p-8 relative overflow-hidden shadow-2xl ${simResult.status === 'EXCELLENT' || simResult.status === 'GOOD' ? 'bg-[#100616] border-emerald-500 shadow-emerald-500/20' : 'bg-[#160606] border-rose-500 shadow-rose-500/20'}`}>
@@ -584,12 +652,11 @@ const App: React.FC = () => {
                   <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-4 ${simResult.status === 'EXCELLENT' || simResult.status === 'GOOD' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
                      {simResult.status === 'EXCELLENT' || simResult.status === 'GOOD' ? <CheckCircle2 size={32} /> : <AlertTriangle size={32} />}
                   </div>
-                  <h3 className="text-2xl font-black text-white uppercase mb-1">Diagnóstico da Mesa</h3>
+                  <h3 className="text-2xl font-black text-white uppercase mb-1">Diagnóstico (Backtest)</h3>
                   <p className={`text-sm font-black uppercase tracking-widest ${simResult.status === 'EXCELLENT' ? 'text-emerald-400' : simResult.status === 'GOOD' ? 'text-teal-400' : 'text-rose-500'}`}>
                       {simResult.status === 'EXCELLENT' ? 'Mesa Mágica (Alta Performance)' : simResult.status === 'GOOD' ? 'Mesa Aprovada' : 'Mesa Perigosa (Evitar)'}
                   </p>
               </div>
-
               <div className="grid grid-cols-2 gap-4 mb-6">
                  <div className="bg-black/40 rounded-xl p-4 border border-slate-800">
                     <p className="text-[10px] font-black text-slate-500 uppercase">Lucro Simulado</p>
@@ -598,19 +665,10 @@ const App: React.FC = () => {
                     </p>
                  </div>
                  <div className="bg-black/40 rounded-xl p-4 border border-slate-800">
-                    <p className="text-[10px] font-black text-slate-500 uppercase">Total Entradas</p>
-                    <p className="text-2xl font-black text-white">{simResult.totalEntries}</p>
-                 </div>
-                 <div className="bg-black/40 rounded-xl p-4 border border-slate-800">
-                    <p className="text-[10px] font-black text-slate-500 uppercase">Greens</p>
-                    <p className="text-2xl font-black text-emerald-400">{simResult.wins}</p>
-                 </div>
-                 <div className="bg-black/40 rounded-xl p-4 border border-slate-800">
-                    <p className="text-[10px] font-black text-slate-500 uppercase">Reds (G5)</p>
-                    <p className="text-2xl font-black text-rose-500">{simResult.losses}</p>
+                     <p className="text-[10px] font-black text-slate-500 uppercase">Greens / Reds</p>
+                     <p className="text-xl font-black text-white">{simResult.wins} <span className="text-slate-600 text-sm">/</span> <span className="text-rose-500">{simResult.losses}</span></p>
                  </div>
               </div>
-              
               <button onClick={() => setSimResult(null)} className="w-full py-4 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-black uppercase text-sm transition-all">Fechar Diagnóstico</button>
            </div>
         </div>
@@ -628,8 +686,16 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* ÁREA DE ALERTA CRÍTICO (SE A MESA ESTIVER RUIM) */}
+      {tableHealth && (tableHealth.status === 'BAD' || tableHealth.status === 'CRITICAL') && (
+          <div className="fixed top-0 left-0 w-full z-[800] bg-rose-600 text-white py-2 flex items-center justify-center gap-3 animate-pulse shadow-2xl shadow-rose-600/50">
+             <Siren className="animate-bounce" />
+             <span className="font-black text-xs uppercase tracking-widest">Alerta de Risco: Mesa Instável ({tableHealth.losses} Reds Recentes) - Recomendado Trocar de Roleta</span>
+          </div>
+      )}
+
       {/* ÁREA DE SINAL FIXA */}
-      <div className="w-full bg-card rounded-[24px] border border-slate-800 shadow-2xl mb-8 sticky top-4 z-[100] overflow-hidden backdrop-blur-xl">
+      <div className={`w-full bg-card rounded-[24px] border border-slate-800 shadow-2xl mb-8 sticky ${tableHealth && (tableHealth.status === 'BAD' || tableHealth.status === 'CRITICAL') ? 'top-12' : 'top-4'} z-[100] overflow-hidden backdrop-blur-xl transition-all duration-300`}>
         <div className="bg-card-header px-8 py-5 flex justify-between items-center">
            <div className="flex items-center gap-4">
               <div className={`w-4 h-4 rounded-full ${signal.status === SystemStatus.AUTHORIZED ? 'bg-purple-500 animate-pulse shadow-[0_0_15px_#a855f7]' : signal.status === SystemStatus.OBSERVATION ? 'bg-amber-500' : 'bg-rose-500'}`} />
@@ -638,6 +704,18 @@ const App: React.FC = () => {
                  <span className="text-[9px] font-bold text-slate-600 uppercase">Vortex 5.0 Hybrid Engine</span>
               </div>
            </div>
+           
+           {/* Monitor de Saúde da Mesa no Header */}
+           {tableHealth && (
+               <div className={`hidden md:flex items-center gap-2 px-3 py-1 rounded-lg border ${tableHealth.status === 'EXCELLENT' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : tableHealth.status === 'GOOD' ? 'bg-teal-500/10 border-teal-500/30 text-teal-400' : 'bg-rose-500/10 border-rose-500/30 text-rose-400'}`}>
+                   <ActivityIndicator status={tableHealth.status} />
+                   <div className="flex flex-col">
+                       <span className="text-[8px] font-black uppercase">Qualidade da Mesa</span>
+                       <span className="text-[10px] font-bold">{tableHealth.status === 'EXCELLENT' ? 'Excelente' : tableHealth.status === 'GOOD' ? 'Estável' : 'Ruim'}</span>
+                   </div>
+               </div>
+           )}
+
            <div className="flex gap-12">
               <HeaderMetric label="Banca Real" value={`R$ ${stats.currentBank.toFixed(2)}`} color="text-white" />
               <HeaderMetric label="Lucro/Preju" value={`R$ ${stats.profit.toFixed(2)}`} color={stats.profit >= 0 ? 'text-emerald-400' : 'text-rose-400'} />
@@ -753,7 +831,7 @@ const App: React.FC = () => {
               <textarea className="w-full bg-black border border-slate-800 rounded-2xl p-6 text-[13px] font-mono text-white focus:border-purple-500 outline-none h-40 mb-6 custom-scroll" placeholder="Ex: 21, 9, 10, 19..." value={inputValue} onChange={e => setInputValue(e.target.value)} />
               <div className="grid grid-cols-2 gap-3 mb-3">
                 <button onClick={pasteNumbers} className="bg-purple-600 hover:bg-purple-500 text-white py-4 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95">Injetar Dados</button>
-                <button onClick={runSimulation} className="bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2">
+                <button onClick={runManualSimulation} className="bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-2xl font-black text-xs uppercase transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2">
                     <FlaskConical size={16} /> Simular Backtest
                 </button>
               </div>
@@ -865,6 +943,13 @@ const HeaderMetric: React.FC<{ label: string; value: string | number; color?: st
     <span className={`text-sm font-black truncate ${color}`}>{value}</span>
   </div>
 );
+
+const ActivityIndicator: React.FC<{ status: 'EXCELLENT' | 'GOOD' | 'BAD' | 'CRITICAL' }> = ({ status }) => {
+    if (status === 'EXCELLENT' || status === 'GOOD') {
+        return <CheckCircle2 size={16} className={status === 'EXCELLENT' ? 'text-emerald-400' : 'text-teal-400'} />;
+    }
+    return <AlertTriangle size={16} className="text-rose-400" />;
+}
 
 const MetricBox: React.FC<{ label: string; value: string | number; color?: string }> = ({ label, value, color = 'text-white' }) => (
   <div className="bg-slate-900/40 p-5 rounded-2xl border border-slate-800/50 shadow-sm">
