@@ -248,9 +248,6 @@ const App: React.FC = () => {
         return;
     }
 
-    // Cronológico: Do mais antigo para o mais recente.
-    // Se o usuário cola "36, 10, 5" (36 é o último), a ordem temporal é 5 -> 10 -> 36.
-    // Vamos assumir que o input do usuário está na ordem padrão (Recente -> Antigo), então invertemos.
     const chronoNumbers = [...rawNumbers].reverse();
 
     let simProfit = 0;
@@ -258,18 +255,15 @@ const App: React.FC = () => {
     let simLosses = 0;
     let simTotalEntries = 0;
     
-    // Simulação de Estado
-    let currentTier = 0; // 0 (sem aposta), 1..5 (Gale)
+    let currentTier = 0;
     let currentTargetCol: number | null = null;
     let currentInvested = 0;
 
-    // Histórico "falso" que cresce com o tempo
     const simHistory: SpinResult[] = [];
 
-    // Precisamos de um histórico inicial para começar a analisar. Vamos usar os primeiros 5 números como 'seed'.
     for(let i=0; i<5; i++) {
         if(i < chronoNumbers.length) {
-            simHistory.unshift({ // Adiciona no início (como o state history)
+            simHistory.unshift({
                 number: chronoNumbers[i],
                 column: getColumn(chronoNumbers[i]),
                 timestamp: '00:00'
@@ -277,37 +271,29 @@ const App: React.FC = () => {
         }
     }
 
-    // Loop principal a partir do 6º número
     for (let i = 5; i < chronoNumbers.length; i++) {
         const num = chronoNumbers[i];
         const col = getColumn(num);
 
-        // 1. Verificar Resultado se estiver apostando
         if (currentTargetCol !== null) {
             const betAmount = progressionLevels[currentTier];
             currentInvested += betAmount;
 
             if (col === currentTargetCol) {
-                // WIN
                 const winAmount = betAmount * 3;
                 simProfit += (winAmount - currentInvested);
                 simWins++;
                 simTotalEntries++;
-                // Reset
                 currentTargetCol = null;
                 currentTier = 0;
                 currentInvested = 0;
             } else {
-                // LOSS
-                if (currentTier < 4) { // 0 a 4 (indices de G1 a G5)
-                    // Continua Gale
+                if (currentTier < 4) {
                     currentTier++;
                 } else {
-                    // RED (Estourou G5)
                     simProfit -= currentInvested;
                     simLosses++;
                     simTotalEntries++;
-                    // Reset
                     currentTargetCol = null;
                     currentTier = 0;
                     currentInvested = 0;
@@ -315,19 +301,14 @@ const App: React.FC = () => {
             }
         } 
         
-        // 2. Se não estiver apostando (ou acabou de resetar), busca nova entrada
         if (currentTargetCol === null) {
              const analysis = analyzeSnapshot(simHistory);
              if (analysis.isValid && analysis.target) {
                  currentTargetCol = analysis.target;
-                 currentTier = 0; // Prepara G1 para a PRÓXIMA rodada (que será o número i+1)
-                 // Nota: na simulação, a entrada é validada AGORA, mas a aposta começa no próximo loop.
-                 // Mas no loop acima, a verificação acontece antes da análise. 
-                 // Então se definirmos agora, ele verificará no i+1. Correto.
+                 currentTier = 0; 
              }
         }
 
-        // 3. Adiciona o número atual ao histórico para a próxima iteração
         simHistory.unshift({
             number: num,
             column: col,
@@ -354,44 +335,52 @@ const App: React.FC = () => {
     if (!file) return;
 
     setIsAnalyzing(true);
-    try {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onloadend = async () => {
-        const base64Data = reader.result as string;
-        const base64Content = base64Data.split(',')[1];
+    
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+        try {
+            const base64Data = reader.result as string;
+            const base64Content = base64Data.split(',')[1];
 
-        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
-          contents: {
-            parts: [
-              {
-                inlineData: {
-                  mimeType: file.type,
-                  data: base64Content
-                }
-              },
-              {
-                text: "Extract all numbers from this roulette history image. Return ONLY a single comma-separated list of integers. Do not include any other words."
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const response = await ai.models.generateContent({
+              model: 'gemini-3-flash-preview',
+              contents: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: file.type,
+                      data: base64Content
+                    }
+                  },
+                  {
+                    text: "Identify the roulette numbers in this image. Return a single comma-separated list of the numbers found, preserving their order. Output ONLY numbers and commas."
+                  }
+                ]
               }
-            ]
-          }
-        });
+            });
 
-        const text = response.text;
-        if (text) {
-          const cleanText = text.replace(/[^0-9,]/g, '');
-          setInputValue(cleanText);
+            const text = response.text;
+            if (text) {
+              const cleanText = text.replace(/[^0-9,]/g, '');
+              setInputValue(cleanText);
+            }
+        } catch (error) {
+            console.error("OCR Error:", error);
+            alert("Erro ao processar imagem. Verifique se a chave API está configurada e se a imagem é válida.");
+        } finally {
+            setIsAnalyzing(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
         }
-      };
-    } catch (error) {
-      console.error("OCR Error:", error);
-      alert("Erro ao ler imagem. Verifique se é um print legível.");
-    } finally {
-      setIsAnalyzing(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
+    };
+
+    reader.onerror = () => {
+        console.error("File Reader Error");
+        alert("Erro ao ler o arquivo de imagem.");
+        setIsAnalyzing(false);
+    };
+
+    reader.readAsDataURL(file);
   };
 
   const getNumberAffinity = useCallback((targetNum: number) => {
@@ -427,17 +416,9 @@ const App: React.FC = () => {
   }, [history]);
 
   const analysis = useMemo(() => {
-    // Wrapper para usar o hook na UI, mas a lógica real está em analyzeSnapshot para reuso
     if (history.length < 5) return null;
     const result = analyzeSnapshot(history);
     
-    // Recalcula breakdown para exibição na UI (analyzeSnapshot simplifica isso)
-    const scores = { 1: 0, 2: 0, 3: 0 }; // Apenas para exibição visual
-    // ... a lógica de scores visuais pode ser mantida ou derivada se necessário
-    // Para simplificar, mantemos a lógica visual original aqui para não quebrar a UI
-    // Mas garantimos que o Score Final é o mesmo
-    
-    // (Re-copiando lógica visual para preencher os badges da UI)
     const affinity = getNumberAffinity(history[0].number);
     let patternTarget = null;
     let patternType = 'Indefinido';
